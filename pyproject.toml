@@ -3,7 +3,11 @@ name = "ff-assistant"
 version = "0.1.0"
 description = "A fantasy football assistant that makes use of Sleeper API."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "asyncio>=4.0.0",
+    "httpx>=0.28.1",
+    "mcp>=1.25.0",
+]
 
 [project.optional-dependencies]
 dev = [
