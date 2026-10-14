@@ -61,7 +61,7 @@ def run() -> int:
     parser.add_argument(
         "--preview-context",
         action="store_true",
-        help="Fetch data and print a concise summary without calling OpenAI or Discord",
+        help="Fetch data and print a concise summary without calling Gemini or Discord",
     )
     args = parser.parse_args()
     config = load_config(Path(".env"))
@@ -86,9 +86,9 @@ def run() -> int:
     webhook = config.get("DISCORD_WEBHOOK_URL", "")
     if not args.preview_context and not webhook:
         raise RuntimeError("DISCORD_WEBHOOK_URL is required in .env")
-    api_key = config.get("OPENAI_API_KEY", "")
+    api_key = config.get("GEMINI_API_KEY", "")
     if not args.preview_context and not api_key:
-        raise RuntimeError("OPENAI_API_KEY is required in .env")
+        raise RuntimeError("GEMINI_API_KEY is required in .env")
 
     cache = Path(config.get("SLEEPER_CACHE_PATH") or ".cache/sleeper-players.json")
     players = sleeper.get_players(cache)
@@ -130,21 +130,23 @@ def run() -> int:
                 mode,
                 context,
                 api_key=api_key,
-                model=config.get("OPENAI_MODEL") or "gpt-5.4-mini",
+                model=config.get("GEMINI_MODEL") or "gemini-3.8-flash",
             )
             send_report(webhook, f"**{name} — {mode.title()} report**\n{report}")
             print(f"Sent {mode} report {number}/{len(chosen)}")
         except Exception as exc:
             failures.append(number)
             print(
-                f"Failed to generate or send report {number}/{len(chosen)}: {type(exc).__name__}",
+                "Failed to generate or send report "
+                f"{number}/{len(chosen)}: {type(exc).__name__}",
                 file=sys.stderr,
             )
             if webhook and not args.preview_context:
                 try:
                     send_report(
                         webhook,
-                        f"Fantasy report failed for {name} ({mode}). Check the GitHub Actions run.",
+                        f"Fantasy report failed for {name} ({mode}). "
+                        "Check the GitHub Actions run.",
                     )
                 except Exception:
                     pass

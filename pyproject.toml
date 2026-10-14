@@ -3,7 +3,7 @@ name = "ff-assistant"
 version = "0.1.0"
 description = "A fantasy football assistant that makes use of Sleeper API."
 requires-python = ">=3.12"
-dependencies = ["openai>=1.99,<3", "python-dotenv>=1,<2"]
+dependencies = ["google-genai>=2.3,<3", "python-dotenv>=1,<2"]
 
 [project.scripts]
 ff-assistant = "ff_assistant.main:main"
@@ -18,3 +18,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+extend-select = ["E501"]

@@ -1,0 +1,6 @@
+Recommend up to five available candidates from available_trending_adds, with
+concrete roster fit, risk, and a possible drop when warranted. Do not recommend
+a player already rostered in this league. Use FAAB ranges only if
+league.faab_enabled is true, never exceeding my_roster.faab_remaining, and label
+them subjective. If evidence is too weak, say which names need review instead
+of ranking them confidently.

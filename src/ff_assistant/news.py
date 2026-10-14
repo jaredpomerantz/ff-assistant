@@ -113,7 +113,9 @@ def fetch_injury_report(season: str, week: int) -> dict[str, Any]:
             "status": "unavailable",
             "url": url,
             "week": week,
-            "reason": "Official report is unavailable or does not match the requested week",
+            "reason": (
+                "Official report is unavailable or does not match the requested week"
+            ),
         }
 
 

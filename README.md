@@ -5,10 +5,10 @@ Read-only fantasy football reports for all active NFL leagues on a configured Sl
 ## Setup
 
 1. Create a private Discord channel visible only to you, then create a webhook for that channel. A Discord webhook posts to a channel; it cannot send a direct message.
-2. In GitHub repository **Settings → Secrets and variables → Actions**, create `DISCORD_WEBHOOK_URL`, `OPENAI_API_KEY`, and `SLEEPER_USERNAME` secrets. API billing is separate from ChatGPT subscriptions.
+2. In GitHub repository **Settings → Secrets and variables → Actions**, create `DISCORD_WEBHOOK_URL`, `GEMINI_API_KEY`, and `SLEEPER_USERNAME` secrets. Get the Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 3. Push this workflow to the repository's default branch, then use **Actions → Fantasy Football Agent → Run workflow** to test each mode. Scheduled workflows only run from the default branch.
 
-Run local commands from the repository root. The app reads settings from its `.env` file. Copy `.env.example` to `.env` and fill in `SLEEPER_USERNAME`, `DISCORD_WEBHOOK_URL`, and `OPENAI_API_KEY` for reports. The app automatically selects all `in_season` leagues in Sleeper's current NFL season. Add `SLEEPER_LEAGUE_IDS` to `.env` as a comma-separated list to select specific leagues. `OPENAI_MODEL` defaults to `gpt-5.4-mini`; add it to `.env` to override the default. No Sleeper API key is needed. GitHub Actions creates `.env` from repository secrets and workflow settings for each run.
+Run local commands from the repository root. The app reads settings from its `.env` file. Copy `.env.example` to `.env` and fill in `SLEEPER_USERNAME`, `DISCORD_WEBHOOK_URL`, and `GEMINI_API_KEY` for reports. The app automatically selects all `in_season` leagues in Sleeper's current NFL season. Add `SLEEPER_LEAGUE_IDS` to `.env` as a comma-separated list to select specific leagues. `GEMINI_MODEL` defaults to `gemini-3.8-flash`; add it to `.env` to override the default. No Sleeper API key is needed. GitHub Actions creates `.env` from repository secrets and workflow settings for each run.
 
 ## Local commands
 
@@ -26,4 +26,4 @@ The `.cache/sleeper-players.json` file is refreshed at most once per day. GitHub
 
 Sleeper's injury status is a snapshot, not an official NFL practice report. Injury and lineup runs also check the [NFL injury report](https://www.nfl.com/injuries/) and reject pages that show a different week; when the current report is unavailable, the output says so. This version has no verified weekly projections, opponent schedule, kickoff times, or historical injury snapshots. Reports avoid numerical projected-point claims. Waiver candidates come from available trending additions, so quiet breakout candidates may be missed. If a league fetch or report fails, the workflow fails and logs the league name without printing credentials.
 
-To preview data without an OpenAI call or Discord post, run `--preview-context`.
+To preview data without a Gemini call or Discord post, run `--preview-context`.

@@ -1,0 +1,5 @@
+List rostered players with noteworthy Sleeper injury_status and what to monitor.
+If official_injury_report.status is available, cite its URL and distinguish
+official practice/game statuses from Sleeper metadata. If unavailable, state
+that no verified current-week practice report is supplied. No change history
+is supplied. Suggest roster alternatives only if the data supports them.

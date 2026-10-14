@@ -194,7 +194,9 @@ def build_context(
         "fetched_at_utc": fetched_at,
         "data_sources": {
             "league_and_players": "Sleeper public API",
-            "injury_status": "Sleeper player metadata; not an official NFL injury report",
+            "injury_status": (
+                "Sleeper player metadata; not an official NFL injury report"
+            ),
             "projections": "unavailable",
             "official_injury_report_reference": "https://www.nfl.com/injuries/",
         },
@@ -243,8 +245,13 @@ def build_context(
         },
         "available_trending_adds": trending_candidates,
         "limitations": [
-            "No verified weekly projections, opponent schedule, kickoff times, or injury change history are integrated. Do not state numerical projected points, game times, opponent, or injury changes as facts. Only state practice participation when an available official injury report supplies it.",
-            "Trending additions show popularity, not fantasy value. This pool may miss useful players who are not trending.",
+            "No verified weekly projections, opponent schedule, kickoff times, "
+            "or injury change history are integrated. Do not state numerical "
+            "projected points, game times, opponent, or injury changes as facts. "
+            "Only state practice participation when an available official "
+            "injury report supplies it.",
+            "Trending additions show popularity, not fantasy value. This pool "
+            "may miss useful players who are not trending.",
         ],
     }
 

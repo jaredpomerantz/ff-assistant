@@ -38,10 +38,10 @@ jobs:
       - run: uv sync --locked --no-dev
       - name: Write .env
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SLEEPER_USERNAME: ${{ secrets.SLEEPER_USERNAME }}
-          OPENAI_MODEL: gpt-5.4-mini
+          GEMINI_MODEL: gemini-3.8-flash
           TASK_MODE: >-
             ${{ inputs.task_mode ||
                 (github.event.schedule == '0 8 * * 2' && 'waivers') ||
@@ -54,10 +54,10 @@ jobs:
           from pathlib import Path
 
           keys = (
-              "OPENAI_API_KEY",
+              "GEMINI_API_KEY",
               "DISCORD_WEBHOOK_URL",
               "SLEEPER_USERNAME",
-              "OPENAI_MODEL",
+              "GEMINI_MODEL",
               "TASK_MODE",
           )
           path = Path(".env")
