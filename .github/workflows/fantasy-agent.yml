@@ -1,0 +1,74 @@
+name: Fantasy Football Agent
+
+on:
+  schedule:
+    - cron: "0 8 * * 2"
+      timezone: "America/Chicago"
+    - cron: "0 8 * * 4"
+      timezone: "America/Chicago"
+    - cron: "0 8 * * 0"
+      timezone: "America/Chicago"
+  workflow_dispatch:
+    inputs:
+      task_mode:
+        description: Report to generate for each active league
+        type: choice
+        options: [waivers, injuries, lineup]
+        default: lineup
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache Sleeper player data
+        uses: actions/cache@v4
+        with:
+          path: .cache/sleeper-players.json
+          key: sleeper-players-${{ github.run_id }}
+          restore-keys: sleeper-players-
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.26"
+      - run: uv sync --locked --no-dev
+      - name: Write .env
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SLEEPER_USERNAME: ${{ secrets.SLEEPER_USERNAME }}
+          GEMINI_MODEL: gemini-3.8-flash
+          TASK_MODE: >-
+            ${{ inputs.task_mode ||
+                (github.event.schedule == '0 8 * * 2' && 'waivers') ||
+                (github.event.schedule == '0 8 * * 4' && 'injuries') ||
+                'lineup' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          keys = (
+              "GEMINI_API_KEY",
+              "DISCORD_WEBHOOK_URL",
+              "SLEEPER_USERNAME",
+              "GEMINI_MODEL",
+              "TASK_MODE",
+          )
+          path = Path(".env")
+          path.write_text(
+              "".join(
+                  f"{key}={json.dumps(os.environ.get(key, ''), ensure_ascii=False)}\n"
+                  for key in keys
+              ),
+              encoding="utf-8",
+          )
+          path.chmod(0o600)
+          PY
+      - name: Generate and send reports
+        run: uv run --no-sync python -m ff_assistant.main

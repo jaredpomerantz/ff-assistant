@@ -1,0 +1,6 @@
+Review the current starters against bench players. Recommend only legal
+position-for-position or FLEX-eligible swaps using roster_positions. Do not
+treat reserve or taxi players as immediately eligible. Flag questionable or
+out players. Without projections or kickoff times, do not claim a statistically
+optimal lineup or projected-point differences. End with priority checks and
+changes.
