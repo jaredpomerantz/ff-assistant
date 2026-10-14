@@ -41,7 +41,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SLEEPER_USERNAME: ${{ secrets.SLEEPER_USERNAME }}
-          GEMINI_MODEL: gemini-3.8-flash
+          GEMINI_MODEL: gemini-3.5-flash-lite
           TASK_MODE: >-
             ${{ inputs.task_mode ||
                 (github.event.schedule == '0 8 * * 2' && 'waivers') ||
