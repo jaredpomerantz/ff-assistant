@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from ff_assistant import sleeper
 from ff_assistant.analysis import analyze
 from ff_assistant.config import load_config
@@ -74,6 +76,7 @@ def run() -> int:
         raise RuntimeError("SLEEPER_USERNAME is required in .env")
     user = sleeper.get_user(username)
     season = config.get("SLEEPER_SEASON") or str(sleeper.get_state()["season"])
+    logger.info("Fetching leagues for season {}", season)
     leagues = sleeper.get_leagues(str(user["user_id"]), season)
     if args.list_leagues:
         for league in leagues:
@@ -82,6 +85,7 @@ def run() -> int:
     chosen = selected_leagues(leagues, config.get("SLEEPER_LEAGUE_IDS"))
     if not chosen:
         raise RuntimeError("No active leagues found for the configured user and season")
+    logger.info("Selected {} leagues for {} reports", len(chosen), mode)
 
     webhook = config.get("DISCORD_WEBHOOK_URL", "")
     if not args.preview_context and not webhook:
@@ -92,6 +96,7 @@ def run() -> int:
 
     cache = Path(config.get("SLEEPER_CACHE_PATH") or ".cache/sleeper-players.json")
     players = sleeper.get_players(cache)
+    logger.info("Loaded {} Sleeper players", len(players))
     trending = sleeper.get_trending("add") if mode == "waivers" else []
     state = sleeper.get_state()
     official = (
@@ -105,6 +110,7 @@ def run() -> int:
     failures = []
     for number, league in enumerate(chosen, start=1):
         name = str(league.get("name") or league["league_id"])
+        logger.info("Preparing league {}/{}", number, len(chosen))
         try:
             context = sleeper.build_context(
                 league, str(user["user_id"]), players, trending, sleeper.utc_now()
@@ -125,21 +131,23 @@ def run() -> int:
                         indent=2,
                     )
                 )
+                logger.info("Previewed league {}/{}", number, len(chosen))
                 continue
+            logger.info(
+                "Generating {} report for league {}/{}", mode, number, len(chosen)
+            )
             report = analyze(
                 mode,
                 context,
                 api_key=api_key,
-                model=config.get("GEMINI_MODEL") or "gemini-3.8-flash",
+                model=config.get("GEMINI_MODEL") or "gemini-3.5-flash-lite",
             )
             send_report(webhook, f"**{name} — {mode.title()} report**\n{report}")
-            print(f"Sent {mode} report {number}/{len(chosen)}")
-        except Exception as exc:
+            logger.info("Sent {} report {}/{}", mode, number, len(chosen))
+        except Exception:
             failures.append(number)
-            print(
-                "Failed to generate or send report "
-                f"{number}/{len(chosen)}: {type(exc).__name__}",
-                file=sys.stderr,
+            logger.exception(
+                "Failed to generate or send report {}/{}", number, len(chosen)
             )
             if webhook and not args.preview_context:
                 try:
@@ -149,7 +157,11 @@ def run() -> int:
                         "Check the GitHub Actions run.",
                     )
                 except Exception:
-                    pass
+                    logger.warning(
+                        "Could not send failure notification for league {}/{}",
+                        number,
+                        len(chosen),
+                    )
     if failures:
         raise RuntimeError(
             f"Reports failed for {len(failures)} of {len(chosen)} leagues"
@@ -159,10 +171,12 @@ def run() -> int:
 
 def main() -> None:
     """Run the command-line program and report failures on stderr."""
+    logger.remove()
+    logger.add(sys.stderr, level="INFO", backtrace=False, diagnose=False)
     try:
         raise SystemExit(run())
-    except Exception as exc:
-        print(f"Fantasy report failed: {exc}", file=sys.stderr)
+    except Exception:
+        logger.exception("Fantasy report failed")
         raise SystemExit(1) from None
 
 

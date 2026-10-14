@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from google import genai
 from google.genai.interactions import Interaction
+from loguru import logger
 
 
 def _read_prompt(name: str) -> str:
@@ -53,11 +54,12 @@ def analyze(task: str, context: dict[str, Any], api_key: str, model: str) -> str
                 f"Task instructions: {TASKS[task]}\n"
                 f"Data:\n{json.dumps(context, separators=(',', ':'))}"
             ),
-            generation_config={"max_output_tokens": 1800, "thinking_level": "low"},
+            generation_config={"max_output_tokens": 1800}, # "thinking_level": "low"},
             store=False,
             stream=False,
         )
     report = (cast(Interaction, response).output_text or "").strip()
     if not report:
         raise RuntimeError("Model returned an empty report")
+    logger.info("Generated {} report with {} characters", task, len(report))
     return report

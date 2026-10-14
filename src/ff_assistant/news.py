@@ -8,6 +8,8 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.request import Request, urlopen
 
+from loguru import logger
+
 
 class _InjuryTable(HTMLParser):
     """Collect player rows from the detailed NFL injury table."""
@@ -101,6 +103,7 @@ def fetch_injury_report(season: str, week: int) -> dict[str, Any]:
         with urlopen(request, timeout=25) as response:
             html = response.read().decode("utf-8")
         rows = parse_injury_page(html, week)
+        logger.info("Fetched {} official injury rows for week {}", len(rows), week)
         return {
             "status": "available",
             "url": url,
@@ -108,7 +111,12 @@ def fetch_injury_report(season: str, week: int) -> dict[str, Any]:
             "fetched_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "players": rows,
         }
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Official injury report unavailable for week {}: {}",
+            week,
+            type(exc).__name__,
+        )
         return {
             "status": "unavailable",
             "url": url,

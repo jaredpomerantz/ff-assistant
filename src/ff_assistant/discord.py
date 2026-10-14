@@ -7,6 +7,8 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from loguru import logger
+
 
 def split_report(report: str, limit: int = 1900) -> list[str]:
     """Split a report into Discord-sized messages.
@@ -42,7 +44,8 @@ def send_report(webhook_url: str, report: str) -> None:
     Raises:
         RuntimeError: Delivery fails after the retry limit.
     """
-    for chunk in split_report(report):
+    chunks = split_report(report)
+    for number, chunk in enumerate(chunks, start=1):
         body = json.dumps(
             {"content": chunk, "allowed_mentions": {"parse": []}}
         ).encode()
@@ -58,6 +61,7 @@ def send_report(webhook_url: str, report: str) -> None:
         for attempt in range(3):
             try:
                 with urlopen(request, timeout=25):
+                    logger.info("Sent Discord chunk {}/{}", number, len(chunks))
                     break
             except HTTPError as exc:
                 if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
@@ -65,10 +69,23 @@ def send_report(webhook_url: str, report: str) -> None:
                         f"Discord delivery failed (HTTP {exc.code})"
                     ) from None
                 delay = min(float(exc.headers.get("Retry-After", "2")), 10)
+                logger.warning(
+                    "Discord returned HTTP {}; retrying chunk {}/{} in {} seconds",
+                    exc.code,
+                    number,
+                    len(chunks),
+                    delay,
+                )
             except (URLError, TimeoutError):
                 if attempt == 2:
                     raise RuntimeError(
                         "Discord delivery failed (network error)"
                     ) from None
                 delay = 2 * (attempt + 1)
+                logger.warning(
+                    "Discord network error; retrying chunk {}/{} in {} seconds",
+                    number,
+                    len(chunks),
+                    delay,
+                )
             time.sleep(delay)

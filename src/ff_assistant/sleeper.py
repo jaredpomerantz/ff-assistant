@@ -12,6 +12,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from loguru import logger
+
 BASE_URL = "https://api.sleeper.app/v1"
 CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
 
@@ -101,15 +103,19 @@ def get_players(cache_path: Path) -> dict[str, Any]:
     ):
         try:
             with cache_path.open() as file:
-                return json.load(file)
+                players = json.load(file)
+            logger.info("Using cached Sleeper player data")
+            return players
         except (OSError, ValueError):
-            pass
+            logger.warning("Sleeper player cache is unreadable; fetching fresh data")
+    logger.info("Fetching Sleeper player data")
     players = get_json("players/nfl")
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = cache_path.with_suffix(".tmp")
     with temporary.open("w") as file:
         json.dump(players, file)
     os.replace(temporary, cache_path)
+    logger.info("Cached {} Sleeper players", len(players))
     return players
 
 
