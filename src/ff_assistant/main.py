@@ -15,6 +15,7 @@ from ff_assistant.analysis import analyze
 from ff_assistant.config import load_config
 from ff_assistant.discord import send_report
 from ff_assistant.news import fetch_injury_report, for_roster
+from ff_assistant.player_stats import PlayerStatsLookup
 
 
 def selected_leagues(
@@ -97,6 +98,7 @@ def run() -> int:
     cache = Path(config.get("SLEEPER_CACHE_PATH") or ".cache/sleeper-players.json")
     players = sleeper.get_players(cache)
     logger.info("Loaded {} Sleeper players", len(players))
+    stats_lookup = PlayerStatsLookup(int(season), players)
     trending = sleeper.get_trending("add") if mode == "waivers" else []
     state = sleeper.get_state()
     official = (
@@ -141,6 +143,7 @@ def run() -> int:
                 context,
                 api_key=api_key,
                 model=config.get("GEMINI_MODEL") or "gemini-3.5-flash-lite",
+                stats_lookup=stats_lookup,
             )
             send_report(webhook, f"**{name} — {mode.title()} report**\n{report}")
             logger.info("Sent {} report {}/{}", mode, number, len(chosen))

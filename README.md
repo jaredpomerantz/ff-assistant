@@ -8,7 +8,7 @@ Read-only fantasy football reports for all active NFL leagues on a configured Sl
 2. In GitHub repository **Settings → Secrets and variables → Actions**, create `DISCORD_WEBHOOK_URL`, `GEMINI_API_KEY`, and `SLEEPER_USERNAME` secrets. Get the Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 3. Push this workflow to the repository's default branch, then use **Actions → Fantasy Football Agent → Run workflow** to test each mode. Scheduled workflows only run from the default branch.
 
-Run local commands from the repository root. The app reads settings from its `.env` file. Copy `.env.example` to `.env` and fill in `SLEEPER_USERNAME`, `DISCORD_WEBHOOK_URL`, and `GEMINI_API_KEY` for reports. The app automatically selects all `in_season` leagues in Sleeper's current NFL season. Add `SLEEPER_LEAGUE_IDS` to `.env` as a comma-separated list to select specific leagues. `GEMINI_MODEL` defaults to `gemini-3.8-flash`; add it to `.env` to override the default. No Sleeper API key is needed. GitHub Actions creates `.env` from repository secrets and workflow settings for each run.
+Run local commands from the repository root. The app reads settings from its `.env` file. Copy `.env.example` to `.env` and fill in `SLEEPER_USERNAME`, `DISCORD_WEBHOOK_URL`, and `GEMINI_API_KEY` for reports. The app automatically selects all `in_season` leagues in Sleeper's current NFL season. Add `SLEEPER_LEAGUE_IDS` to `.env` as a comma-separated list to select specific leagues. `GEMINI_MODEL` defaults to `gemini-3.5-flash-lite`; add it to `.env` to override the default. No Sleeper API key is needed. GitHub Actions creates `.env` from repository secrets and workflow settings for each run.
 
 ## Local commands
 
@@ -21,6 +21,8 @@ pytest
 ```
 
 The `.cache/sleeper-players.json` file is refreshed at most once per day. GitHub Actions caches it between runs. Reports use Sleeper league settings, rosters, player metadata, and trending additions. The model receives a compact roster-specific snapshot, never the entire player database.
+
+The model can request regular-season player statistics through `nflreadpy` for rostered players and available trending candidates in its report context. The tool returns season and recent-game attempts, carries, targets, catches, yards, touchdowns, and derived efficiency rates. Offensive snap percentages are included when nflverse player IDs can be matched to the separate PFR snap-count data. Data loads on the first tool call and is reused across leagues in the same run. Tool results state the latest week available; missing or stale data should not be treated as current-week performance.
 
 ## Data limits
 
