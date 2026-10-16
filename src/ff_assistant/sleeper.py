@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import gzip
 import json
-import os
-import time
 from datetime import datetime, timezone
-from pathlib import Path
+from importlib.resources import files
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -15,7 +14,6 @@ from urllib.request import Request, urlopen
 from loguru import logger
 
 BASE_URL = "https://api.sleeper.app/v1"
-CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 class SleeperError(RuntimeError):
@@ -88,35 +86,39 @@ def get_trending(kind: str, limit: int = 50) -> list[dict[str, Any]]:
     )
 
 
-def get_players(cache_path: Path) -> dict[str, Any]:
-    """Return the player map, using a cache younger than one day.
-
-    Args:
-        cache_path: Location of the local player map cache.
+def get_players() -> dict[str, Any]:
+    """Return the bundled Sleeper player snapshot.
 
     Returns:
         Player data keyed by Sleeper player ID.
+
+    Raises:
+        SleeperError: The bundled snapshot is missing or invalid.
     """
-    if (
-        cache_path.exists()
-        and time.time() - cache_path.stat().st_mtime < CACHE_MAX_AGE_SECONDS
-    ):
-        try:
-            with cache_path.open() as file:
+    resource = files("ff_assistant").joinpath("resources/sleeper-players.json.gz")
+    try:
+        with resource.open("rb") as compressed:
+            with gzip.open(compressed, "rt", encoding="utf-8") as file:
                 players = json.load(file)
-            logger.info("Using cached Sleeper player data")
-            return players
-        except (OSError, ValueError):
-            logger.warning("Sleeper player cache is unreadable; fetching fresh data")
-    logger.info("Fetching Sleeper player data")
-    players = get_json("players/nfl")
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = cache_path.with_suffix(".tmp")
-    with temporary.open("w") as file:
-        json.dump(players, file)
-    os.replace(temporary, cache_path)
-    logger.info("Cached {} Sleeper players", len(players))
+    except (OSError, EOFError, ValueError) as exc:
+        raise SleeperError(
+            "Bundled Sleeper player snapshot is unavailable or invalid"
+        ) from exc
+    if not isinstance(players, dict):
+        raise SleeperError("Bundled Sleeper player snapshot must be a player map")
+    logger.info("Loaded {} players from bundled Sleeper snapshot", len(players))
     return players
+
+
+def get_players_fetched_at() -> str:
+    """Return the UTC fetch time recorded for the bundled player snapshot."""
+    resource = files("ff_assistant").joinpath(
+        "resources/sleeper-players-fetched-at.txt"
+    )
+    try:
+        return resource.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise SleeperError("Bundled Sleeper snapshot timestamp is unavailable") from exc
 
 
 def player_summary(player_id: str, players: dict[str, Any]) -> dict[str, Any]:
@@ -199,9 +201,13 @@ def build_context(
     return {
         "fetched_at_utc": fetched_at,
         "data_sources": {
-            "league_and_players": "Sleeper public API",
+            "league_and_players": (
+                "Sleeper public API; player metadata from bundled snapshot fetched "
+                f"{get_players_fetched_at()}"
+            ),
             "injury_status": (
-                "Sleeper player metadata; not an official NFL injury report"
+                "Bundled Sleeper player metadata; may be stale and is not an "
+                "official NFL injury report"
             ),
             "projections": "unavailable",
             "official_injury_report_reference": "https://www.nfl.com/injuries/",
@@ -251,6 +257,8 @@ def build_context(
         },
         "available_trending_adds": trending_candidates,
         "limitations": [
+            "Bundled Sleeper player metadata is only as current as its recorded "
+            "fetch time; roster names, teams, status, and injury fields may be stale.",
             "No verified weekly projections, opponent schedule, kickoff times, "
             "or injury change history are integrated. Do not state numerical "
             "projected points, game times, opponent, or injury changes as facts. "

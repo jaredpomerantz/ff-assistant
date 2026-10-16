@@ -95,9 +95,7 @@ def run() -> int:
     if not args.preview_context and not api_key:
         raise RuntimeError("GEMINI_API_KEY is required in .env")
 
-    cache = Path(config.get("SLEEPER_CACHE_PATH") or ".cache/sleeper-players.json")
-    players = sleeper.get_players(cache)
-    logger.info("Loaded {} Sleeper players", len(players))
+    players = sleeper.get_players()
     stats_lookup = PlayerStatsLookup(int(season), players)
     trending = sleeper.get_trending("add") if mode == "waivers" else []
     state = sleeper.get_state()

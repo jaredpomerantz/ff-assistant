@@ -1,9 +1,9 @@
 Recommend up to ten available candidates from available_trending_adds, with
-concrete roster fit, risk, and a possible drop when warranted. Do not recommend
+concrete roster fit, risk, and a possible drop when warranted. Pre-mortem the current roster
+for risks before deciding which players would be helpful adds. Do not recommend
 a player already rostered in this league. Use FAAB ranges only if
 league.faab_enabled is true, never exceeding my_roster.faab_remaining, and label
-them subjective. If evidence is too weak, say which names need review instead
-of ranking them confidently. Remember to recommend players who either figure to have
+them subjective. Remember to recommend players who either figure to have
 volume in the short term or potentially high value in the long term; indicate your
 reasoning for recommendation. Always reference statistics, such as efficiency
 numbers and targets/carries.

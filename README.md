@@ -20,7 +20,15 @@ python -m ff_assistant.main --mode lineup
 pytest
 ```
 
-The `.cache/sleeper-players.json` file is refreshed at most once per day. GitHub Actions caches it between runs. Reports use Sleeper league settings, rosters, player metadata, and trending additions. The model receives a compact roster-specific snapshot, never the entire player database.
+The app loads player metadata from the bundled `src/ff_assistant/resources/sleeper-players.json.gz` snapshot. Normal runs and GitHub Actions do not request Sleeper's large `players/nfl` endpoint. The snapshot was fetched on 2026-10-16 and is static until manually refreshed, so its teams, status, and injury fields can become stale. League settings, rosters, and trending additions still come from Sleeper at run time. The model receives a compact roster-specific context, never the entire player database.
+
+To refresh the bundled snapshot from the repository root, run:
+
+```bash
+curl --fail --location --compressed https://api.sleeper.app/v1/players/nfl --output src/ff_assistant/resources/sleeper-players.json
+gzip -n -9 -f src/ff_assistant/resources/sleeper-players.json
+date -u +%Y-%m-%dT%H:%M:%SZ > src/ff_assistant/resources/sleeper-players-fetched-at.txt
+```
 
 The model can request regular-season player statistics through `nflreadpy` for rostered players and available trending candidates in its report context. The tool returns season and recent-game attempts, carries, targets, catches, yards, touchdowns, and derived efficiency rates. Offensive snap percentages are included when nflverse player IDs can be matched to the separate PFR snap-count data. Data loads on the first tool call and is reused across leagues in the same run. Tool results state the latest week available; missing or stale data should not be treated as current-week performance.
 

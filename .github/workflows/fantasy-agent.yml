@@ -26,12 +26,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Cache Sleeper player data
-        uses: actions/cache@v4
-        with:
-          path: .cache/sleeper-players.json
-          key: sleeper-players-${{ github.run_id }}
-          restore-keys: sleeper-players-
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.9.26"
