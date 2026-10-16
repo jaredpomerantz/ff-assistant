@@ -1,6 +1,10 @@
 Review the current starters against bench players and available players. Recommend only legal
 position-for-position or FLEX-eligible swaps using roster_positions. Do not
-treat reserve or taxi players as immediately eligible. Flag questionable or
-out players. Without projections or kickoff times, do not claim a statistically
-optimal lineup or projected-point differences. End with priority checks and
-changes.
+treat reserve or taxi players as immediately eligible. Call get_player_matchups
+for relevant starters and alternatives before naming an opponent, bye, or kickoff
+time. Flag questionable, out, and bye-week starters. A bye-week player scores
+zero points. Opponent and kickoff alone do not establish matchup difficulty or
+projected points; do not claim a statistically optimal lineup or projected-point
+differences. Do not suggest moving a player whose kickoff has passed. When two
+eligible players can fill a fixed position and FLEX, keep the later kickoff in
+FLEX for lineup flexibility. End with priority checks and changes.

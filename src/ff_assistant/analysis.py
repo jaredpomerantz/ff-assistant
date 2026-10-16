@@ -10,6 +10,7 @@ from google import genai
 from google.genai.interactions import Interaction
 from loguru import logger
 
+from ff_assistant.player_matchups import PlayerMatchupLookup
 from ff_assistant.player_stats import PlayerStatsLookup
 
 
@@ -52,6 +53,36 @@ PLAYER_STATS_TOOL = {
         "required": ["player_ids"],
     },
 }
+PLAYER_MATCHUPS_TOOL = {
+    "type": "function",
+    "name": "get_player_matchups",
+    "description": (
+        "Look up current-week NFL opponents, byes, and kickoff times for Sleeper "
+        "player IDs in the supplied report data. Does not project fantasy points."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "player_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "One to twelve Sleeper player IDs from the report data.",
+            },
+        },
+        "required": ["player_ids"],
+    },
+}
+
+
+def _allowed_player_ids(context: dict[str, Any]) -> set[str]:
+    return {
+        str(player["id"])
+        for player in (
+            context.get("my_roster", {}).get("players", [])
+            + context.get("available_trending_adds", [])
+        )
+        if player.get("id") is not None
+    }
 
 
 def _run_stats_tool(
@@ -60,18 +91,10 @@ def _run_stats_tool(
     if not isinstance(arguments, dict):
         return {"status": "invalid_request", "reason": "Invalid tool arguments"}
     player_ids = arguments.get("player_ids")
-    allowed_ids = {
-        str(player["id"])
-        for player in (
-            context.get("my_roster", {}).get("players", [])
-            + context.get("available_trending_adds", [])
-        )
-        if player.get("id") is not None
-    }
     if (
         not isinstance(player_ids, list)
         or any(not isinstance(player_id, str) for player_id in player_ids)
-        or not set(player_ids) <= allowed_ids
+        or not set(player_ids) <= _allowed_player_ids(context)
     ):
         return {
             "status": "invalid_request",
@@ -80,12 +103,31 @@ def _run_stats_tool(
     return stats_lookup.lookup(player_ids, arguments.get("recent_games", 3))
 
 
+def _run_matchups_tool(
+    arguments: Any, context: dict[str, Any], matchups_lookup: PlayerMatchupLookup
+) -> dict[str, Any]:
+    if not isinstance(arguments, dict):
+        return {"status": "invalid_request", "reason": "Invalid tool arguments"}
+    player_ids = arguments.get("player_ids")
+    if (
+        not isinstance(player_ids, list)
+        or any(not isinstance(player_id, str) for player_id in player_ids)
+        or not set(player_ids) <= _allowed_player_ids(context)
+    ):
+        return {
+            "status": "invalid_request",
+            "reason": "Player ID is not in this report",
+        }
+    return matchups_lookup.lookup(player_ids)
+
+
 def analyze(
     task: str,
     context: dict[str, Any],
     api_key: str,
     model: str,
     stats_lookup: PlayerStatsLookup,
+    matchups_lookup: PlayerMatchupLookup,
 ) -> str:
     """Generate a report from the supplied league snapshot.
 
@@ -95,6 +137,7 @@ def analyze(
         api_key: Gemini API key read from the dotenv file.
         model: Model name read from the dotenv file or its default.
         stats_lookup: Season-scoped lookup for nflverse player statistics.
+        matchups_lookup: Week-scoped lookup for NFL player matchups.
 
     Returns:
         The generated report text.
@@ -115,13 +158,14 @@ def analyze(
     ]
     with genai.Client(api_key=api_key) as client:
         for turn in range(MAX_TOOL_ROUNDS + 1):
+            logger.info("Requesting Gemini turn {} for {} report", turn + 1, task)
             response = cast(
                 Interaction,
                 client.interactions.create(
                     model=model,
                     system_instruction=SYSTEM,
                     input=history,
-                    tools=[PLAYER_STATS_TOOL],
+                    tools=[PLAYER_STATS_TOOL, PLAYER_MATCHUPS_TOOL],
                     generation_config={"max_output_tokens": 1800},
                     store=False,
                     stream=False,
@@ -132,19 +176,30 @@ def analyze(
             if not calls:
                 report = (response.output_text or "").strip()
                 if not report:
-                    raise RuntimeError("Model returned an empty report")
+                    error_codes = [
+                        error.code for error in (response.errors or []) if error.code
+                    ]
+                    step_types = [step.type for step in steps]
+                    raise RuntimeError(
+                        "Model returned an empty report "
+                        f"(status={response.status}, error_codes={error_codes}, "
+                        f"step_types={step_types})"
+                    )
                 logger.info("Generated {} report with {} characters", task, len(report))
                 return report
             if turn == MAX_TOOL_ROUNDS:
-                raise RuntimeError("Model exceeded the player-stats tool call limit")
+                raise RuntimeError("Model exceeded the tool call limit")
             history.extend(step.model_dump() for step in steps)
-            logger.info("Answering {} player-stats tool calls", len(calls))
+            logger.info("Answering {} model tool calls", len(calls))
             for call in calls:
-                result = (
-                    _run_stats_tool(call.arguments, context, stats_lookup)
-                    if call.name == "get_player_stats"
-                    else {"status": "invalid_request", "reason": "Unknown tool"}
-                )
+                if call.name == "get_player_stats":
+                    result = _run_stats_tool(call.arguments, context, stats_lookup)
+                elif call.name == "get_player_matchups":
+                    result = _run_matchups_tool(
+                        call.arguments, context, matchups_lookup
+                    )
+                else:
+                    result = {"status": "invalid_request", "reason": "Unknown tool"}
                 history.append(
                     {
                         "type": "function_result",

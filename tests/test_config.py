@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from unittest.mock import Mock
 
+from loguru import logger
 import pytest
 
 from ff_assistant import main
@@ -50,3 +51,54 @@ def test_run_uses_dotenv_username(
 
     assert main.run() == 0
     get_user.assert_called_once_with("file-user")
+
+
+def test_run_identifies_failed_report_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Name the league and failed step in logs and the Discord notification."""
+    (tmp_path / ".env").write_text(
+        'SLEEPER_USERNAME="file-user"\n'
+        'SLEEPER_SEASON="2026"\n'
+        'GEMINI_API_KEY="secret-key"\n'
+        'DISCORD_WEBHOOK_URL="https://example.com/webhook"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["ff-assistant", "--mode", "waivers"])
+    monkeypatch.setattr(main.sleeper, "get_user", lambda *_: {"user_id": "123"})
+    monkeypatch.setattr(
+        main.sleeper,
+        "get_leagues",
+        lambda *_: [{"league_id": "456", "name": "My League", "status": "in_season"}],
+    )
+    monkeypatch.setattr(main.sleeper, "get_players", lambda: {})
+    monkeypatch.setattr(main.sleeper, "get_trending", lambda *_: [])
+    monkeypatch.setattr(
+        main.sleeper,
+        "get_state",
+        lambda: {"season_type": "off", "week": 1},
+    )
+    monkeypatch.setattr(
+        main.sleeper,
+        "build_context",
+        lambda *_: {"my_roster": {"players": []}},
+    )
+    monkeypatch.setattr(main, "PlayerStatsLookup", Mock())
+    monkeypatch.setattr(main, "analyze", Mock(side_effect=RuntimeError("model busy")))
+    send_report = Mock()
+    monkeypatch.setattr(main, "send_report", send_report)
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record["message"]))
+    try:
+        with pytest.raises(RuntimeError, match="Reports failed.*456"):
+            main.run()
+    finally:
+        logger.remove(sink_id)
+
+    assert any(
+        "Failed waivers report for league My League (456) during generating" in message
+        for message in messages
+    )
+    assert "while generating the report with Gemini" in send_report.call_args.args[1]
+    assert all("secret-key" not in message for message in messages)

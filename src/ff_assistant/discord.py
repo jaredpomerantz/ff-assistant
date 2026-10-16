@@ -66,7 +66,8 @@ def send_report(webhook_url: str, report: str) -> None:
             except HTTPError as exc:
                 if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
                     raise RuntimeError(
-                        f"Discord delivery failed (HTTP {exc.code})"
+                        f"Discord delivery failed for chunk {number}/{len(chunks)} "
+                        f"(HTTP {exc.code})"
                     ) from None
                 delay = min(float(exc.headers.get("Retry-After", "2")), 10)
                 logger.warning(
@@ -79,7 +80,8 @@ def send_report(webhook_url: str, report: str) -> None:
             except (URLError, TimeoutError):
                 if attempt == 2:
                     raise RuntimeError(
-                        "Discord delivery failed (network error)"
+                        f"Discord delivery failed for chunk {number}/{len(chunks)} "
+                        "(network error)"
                     ) from None
                 delay = 2 * (attempt + 1)
                 logger.warning(

@@ -42,9 +42,14 @@ def get_json(path: str, params: dict[str, str | int] | None = None) -> Any:
     try:
         with urlopen(request, timeout=25) as response:
             return json.load(response)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-        # Avoid echoing URLs or response bodies in CI logs.
-        raise SleeperError("Sleeper request failed") from exc
+    except HTTPError as exc:
+        raise SleeperError(
+            f"Sleeper request for {path} failed (HTTP {exc.code})"
+        ) from exc
+    except (URLError, TimeoutError, ValueError) as exc:
+        raise SleeperError(
+            f"Sleeper request for {path} failed ({type(exc).__name__})"
+        ) from exc
 
 
 def get_user(username: str) -> dict[str, Any]:
@@ -210,6 +215,7 @@ def build_context(
                 "official NFL injury report"
             ),
             "projections": "unavailable",
+            "matchups": "nflverse schedule through get_player_matchups tool",
             "official_injury_report_reference": "https://www.nfl.com/injuries/",
         },
         "league": {
@@ -259,9 +265,9 @@ def build_context(
         "limitations": [
             "Bundled Sleeper player metadata is only as current as its recorded "
             "fetch time; roster names, teams, status, and injury fields may be stale.",
-            "No verified weekly projections, opponent schedule, kickoff times, "
-            "or injury change history are integrated. Do not state numerical "
-            "projected points, game times, opponent, or injury changes as facts. "
+            "No verified weekly projections or injury change history are "
+            "integrated. Use get_player_matchups before stating opponents, byes, "
+            "or kickoff times, and do not infer projected points from opponents. "
             "Only state practice participation when an available official "
             "injury report supplies it.",
             "Trending additions show popularity, not fantasy value. This pool "

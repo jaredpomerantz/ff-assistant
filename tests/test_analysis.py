@@ -18,7 +18,12 @@ def test_analyze_sends_report_to_gemini() -> None:
         create.return_value.steps = []
 
         report = analyze(
-            "lineup", {"league": {"id": "123"}}, "test-key", "gemini-3.8-flash", Mock()
+            "lineup",
+            {"league": {"id": "123"}},
+            "test-key",
+            "gemini-3.8-flash",
+            Mock(),
+            Mock(),
         )
 
     assert report == "Start this player."
@@ -28,6 +33,7 @@ def test_analyze_sends_report_to_gemini() -> None:
     assert request["system_instruction"] == SYSTEM
     assert '"id":"123"' in request["input"][0]["content"][0]["text"]
     assert request["tools"][0]["name"] == "get_player_stats"
+    assert request["tools"][1]["name"] == "get_player_matchups"
     assert request["store"] is False
     assert request["generation_config"]["max_output_tokens"] == 1800
 
@@ -38,9 +44,11 @@ def test_analyze_rejects_empty_gemini_response() -> None:
         create = client_class.return_value.__enter__.return_value.interactions.create
         create.return_value.output_text = None
         create.return_value.steps = []
+        create.return_value.status = "failed"
+        create.return_value.errors = [Mock(code="MODEL_BUSY")]
 
-        with pytest.raises(RuntimeError, match="empty report"):
-            analyze("waivers", {}, "test-key", "gemini-3.8-flash", Mock())
+        with pytest.raises(RuntimeError, match="status=failed.*MODEL_BUSY"):
+            analyze("waivers", {}, "test-key", "gemini-3.8-flash", Mock(), Mock())
 
 
 def test_analyze_returns_player_stats_to_model() -> None:
@@ -66,7 +74,7 @@ def test_analyze_returns_player_stats_to_model() -> None:
         create = client_class.return_value.__enter__.return_value.interactions.create
         create.side_effect = [first, final]
         report = analyze(
-            "lineup", context, "test-key", "gemini-3.8-flash", stats_lookup
+            "lineup", context, "test-key", "gemini-3.8-flash", stats_lookup, Mock()
         )
 
     assert report == "Player had 10 targets."
@@ -76,3 +84,44 @@ def test_analyze_returns_player_stats_to_model() -> None:
     assert history[2]["type"] == "function_result"
     assert history[2]["call_id"] == "call-1"
     assert json.loads(history[2]["result"][0]["text"])["targets"] == 10
+
+
+def test_analyze_returns_matchups_only_for_report_players() -> None:
+    """Expose schedule results for roster players without allowing arbitrary IDs."""
+    calls = []
+    for call_id, player_id in (("call-1", "s1"), ("call-2", "other")):
+        call = Mock()
+        call.type = "function_call"
+        call.name = "get_player_matchups"
+        call.id = call_id
+        call.arguments = {"player_ids": [player_id]}
+        call.model_dump.return_value = {
+            "type": "function_call",
+            "name": call.name,
+            "id": call.id,
+            "arguments": call.arguments,
+        }
+        calls.append(call)
+    first = Mock(steps=calls, output_text=None)
+    final = Mock(steps=[], output_text="The starter plays Denver.")
+    matchups_lookup = Mock()
+    matchups_lookup.lookup.return_value = {
+        "status": "available",
+        "players": [{"opponent": "DEN"}],
+    }
+    context = {"my_roster": {"players": [{"id": "s1"}]}}
+
+    with patch("ff_assistant.analysis.genai.Client") as client_class:
+        create = client_class.return_value.__enter__.return_value.interactions.create
+        create.side_effect = [first, final]
+        report = analyze(
+            "lineup", context, "test-key", "gemini-3.8-flash", Mock(), matchups_lookup
+        )
+
+    assert report == "The starter plays Denver."
+    matchups_lookup.lookup.assert_called_once_with(["s1"])
+    history = create.call_args.kwargs["input"]
+    assert (
+        json.loads(history[3]["result"][0]["text"])["players"][0]["opponent"] == "DEN"
+    )
+    assert json.loads(history[4]["result"][0]["text"])["status"] == "invalid_request"
