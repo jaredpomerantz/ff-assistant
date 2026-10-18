@@ -1,9 +1,21 @@
-Recommend up to ten available candidates from available_trending_adds, with
-concrete roster fit, risk, and a possible drop when warranted. Do not recommend
+Recommend up to ten available candidates from available_trending_adds and the most valuable
+available players from get_player_values, with
+concrete roster fit, risk, and a possible drop when warranted. Pre-mortem the current roster
+for risks before deciding which players would be helpful adds. Do not recommend
 a player already rostered in this league. Use FAAB ranges only if
 league.faab_enabled is true, never exceeding my_roster.faab_remaining, and label
-them subjective. If evidence is too weak, say which names need review instead
-of ranking them confidently. Remember to recommend players who either figure to have
+them subjective. Remember to recommend players who either figure to have
 volume in the short term or potentially high value in the long term; indicate your
-reasoning for recommendation. Always reference statistics, such as efficiency
-numbers and targets/carries.
+reasoning for recommendation. If listing a player, always reference relevant statistics, 
+such as efficiency numbers and targets/carries, and recent news that has made them
+relevant. ALWAYS USE THE `get_player_values` TOOL to compare available players' value with
+currently rostered players and aggressively look for opportunities to acquire
+players with long-term value. Always consider the league rules; do not consider rules that do
+not apply to the league when making recommendations.
+
+Format as the following, below. Make the section titles bold.
+
+Recommended Actions:
+<Place recommended actions on waivers here. Provide reasoning for each. If none are necessary, print "No waiver actions recommended." and describe in 1-2 sentences why.>
+
+------------------------------------------------------------------------------

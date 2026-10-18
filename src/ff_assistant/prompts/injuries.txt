@@ -3,3 +3,18 @@ If official_injury_report.status is available, cite its URL and distinguish
 official practice/game statuses from Sleeper metadata. If unavailable, state
 that no verified current-week practice report is supplied. No change history
 is supplied. Suggest roster alternatives only if the data supports them.
+Get the players' matchups and game times and day of the week for the current week and consider them
+in the writeup.
+
+Format as the following, below. Make the section titles bold.
+
+Lineup Injury Statuses:
+<Place injury statuses here for players currently in the lineup. Provide context for each. If none, print "No current injuries to monitor in the current lineup.">
+
+Bench Injury Statuses:
+<Place injury statuses here for players currently on the bench. Provide context for each. If none, print "No current injuries to monitor on the bench.">
+
+IR Injury Statuses:
+<Place injury statuses here for players currently on injured reserve. Provide context for each. If none, print "No current injuries to monitor on injured reserve.">
+
+------------------------------------------------------------------------------

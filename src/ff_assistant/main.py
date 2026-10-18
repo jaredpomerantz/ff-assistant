@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,9 @@ from ff_assistant.analysis import analyze
 from ff_assistant.config import load_config
 from ff_assistant.discord import send_report
 from ff_assistant.news import fetch_injury_report, for_roster
+from ff_assistant.player_matchups import PlayerMatchupLookup
+from ff_assistant.player_stats import PlayerStatsLookup
+from ff_assistant.player_values import PlayerValuesLookup
 
 
 def selected_leagues(
@@ -42,8 +46,11 @@ def selected_leagues(
     return found
 
 
-def run() -> int:
+def run(config: dict[str, str] | None = None) -> int:
     """Fetch league data and generate, preview, or send the requested reports.
+
+    Args:
+        config: Settings loaded from .env, or None to load them here.
 
     Returns:
         Zero when all requested reports succeed.
@@ -66,7 +73,8 @@ def run() -> int:
         help="Fetch data and print a concise summary without calling Gemini or Discord",
     )
     args = parser.parse_args()
-    config = load_config(Path(".env"))
+    if config is None:
+        config = load_config(Path(".env"))
     mode = args.mode or config.get("TASK_MODE") or "lineup"
     if mode not in ("waivers", "injuries", "lineup"):
         parser.error(f"invalid TASK_MODE in .env: {mode}")
@@ -93,12 +101,25 @@ def run() -> int:
     api_key = config.get("GEMINI_API_KEY", "")
     if not args.preview_context and not api_key:
         raise RuntimeError("GEMINI_API_KEY is required in .env")
+    try:
+        retry_delay_seconds = float(config.get("GEMINI_RETRY_DELAY_SECONDS") or "5")
+    except ValueError as exc:
+        raise ValueError(
+            "GEMINI_RETRY_DELAY_SECONDS must be a nonnegative finite number"
+        ) from exc
+    if not isfinite(retry_delay_seconds) or retry_delay_seconds < 0:
+        raise ValueError(
+            "GEMINI_RETRY_DELAY_SECONDS must be a nonnegative finite number"
+        )
 
-    cache = Path(config.get("SLEEPER_CACHE_PATH") or ".cache/sleeper-players.json")
-    players = sleeper.get_players(cache)
-    logger.info("Loaded {} Sleeper players", len(players))
+    players = sleeper.get_players()
+    stats_lookup = PlayerStatsLookup(int(season), players)
+    values_lookup = PlayerValuesLookup(players)
     trending = sleeper.get_trending("add") if mode == "waivers" else []
     state = sleeper.get_state()
+    matchups_lookup = PlayerMatchupLookup(
+        int(season), int(state["week"]), str(state.get("season_type") or ""), players
+    )
     official = (
         fetch_injury_report(season, int(state["week"]))
         if mode in ("injuries", "lineup") and state.get("season_type") == "regular"
@@ -108,17 +129,31 @@ def run() -> int:
         }
     )
     failures = []
+    model = config.get("GEMINI_MODEL") or "gemini-3.5-flash-lite"
     for number, league in enumerate(chosen, start=1):
-        name = str(league.get("name") or league["league_id"])
-        logger.info("Preparing league {}/{}", number, len(chosen))
+        league_id = str(league["league_id"])
+        name = str(league.get("name") or league_id)
+        stage = "building roster context"
+        logger.info(
+            "Preparing {} report for league {}/{}: {} ({})",
+            mode,
+            number,
+            len(chosen),
+            name,
+            league_id,
+        )
         try:
             context = sleeper.build_context(
                 league, str(user["user_id"]), players, trending, sleeper.utc_now()
             )
+            context["nfl_week"] = int(state["week"])
+            context["season_type"] = state.get("season_type")
+            stage = "matching the official injury report"
             context["official_injury_report"] = for_roster(
                 official, context["my_roster"]["players"]
             )
             if args.preview_context:
+                stage = "printing context preview"
                 print(
                     json.dumps(
                         {
@@ -133,38 +168,47 @@ def run() -> int:
                 )
                 logger.info("Previewed league {}/{}", number, len(chosen))
                 continue
-            logger.info(
-                "Generating {} report for league {}/{}", mode, number, len(chosen)
-            )
+            stage = f"generating the report with Gemini model {model}"
+            logger.info("{} for league {} ({})", stage, name, league_id)
             report = analyze(
                 mode,
                 context,
                 api_key=api_key,
-                model=config.get("GEMINI_MODEL") or "gemini-3.5-flash-lite",
+                model=model,
+                stats_lookup=stats_lookup,
+                matchups_lookup=matchups_lookup,
+                retry_delay_seconds=retry_delay_seconds,
+                values_lookup=values_lookup,
             )
+            stage = "sending the report to Discord"
             send_report(webhook, f"**{name} — {mode.title()} report**\n{report}")
             logger.info("Sent {} report {}/{}", mode, number, len(chosen))
         except Exception:
-            failures.append(number)
+            failures.append(league_id)
             logger.exception(
-                "Failed to generate or send report {}/{}", number, len(chosen)
+                "Failed {} report for league {} ({}) during {}",
+                mode,
+                name,
+                league_id,
+                stage,
             )
             if webhook and not args.preview_context:
                 try:
                     send_report(
                         webhook,
-                        f"Fantasy report failed for {name} ({mode}). "
+                        f"Fantasy report failed for {name} ({mode}) while {stage}. "
                         "Check the GitHub Actions run.",
                     )
                 except Exception:
-                    logger.warning(
-                        "Could not send failure notification for league {}/{}",
-                        number,
-                        len(chosen),
+                    logger.exception(
+                        "Could not send failure notification for league {} ({})",
+                        name,
+                        league_id,
                     )
     if failures:
         raise RuntimeError(
-            f"Reports failed for {len(failures)} of {len(chosen)} leagues"
+            f"Reports failed for {len(failures)} of {len(chosen)} leagues: "
+            f"{', '.join(failures)}"
         )
     return 0
 
@@ -174,7 +218,12 @@ def main() -> None:
     logger.remove()
     logger.add(sys.stderr, level="INFO", backtrace=False, diagnose=False)
     try:
-        raise SystemExit(run())
+        config = load_config(Path(".env"))
+        log_level = (config.get("LOG_LEVEL") or "INFO").upper()
+        if log_level != "INFO":
+            logger.remove()
+            logger.add(sys.stderr, level=log_level, backtrace=False, diagnose=False)
+        raise SystemExit(run(config))
     except Exception:
         logger.exception("Fantasy report failed")
         raise SystemExit(1) from None

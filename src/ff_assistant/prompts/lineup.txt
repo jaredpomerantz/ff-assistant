@@ -1,6 +1,24 @@
-Review the current starters against bench players. Recommend only legal
+Review the current starters against bench players and available players. Recommend only legal
 position-for-position or FLEX-eligible swaps using roster_positions. Do not
-treat reserve or taxi players as immediately eligible. Flag questionable or
-out players. Without projections or kickoff times, do not claim a statistically
-optimal lineup or projected-point differences. End with priority checks and
-changes.
+treat reserve or taxi players as immediately eligible. Call get_player_matchups
+for relevant starters and alternatives before naming an opponent, bye, or kickoff
+time. Flag questionable, out, and bye-week starters. A bye-week player scores
+zero points. Opponent and kickoff alone do not establish matchup difficulty or
+projected points; do not claim a statistically optimal lineup or projected-point
+differences. Do not suggest moving a player whose kickoff has passed. When two
+eligible players can fill a fixed position and FLEX, keep the later kickoff in
+FLEX for lineup flexibility. Batch relevant player IDs into each tool call where
+possible. Focus on swaps and checks that could change this week's lineup; do
+not request details for every bench player. End with priority checks and changes.
+
+Format as the following, below. Make the section titles bold.
+
+```
+Recommended Actions:
+<Place recommended actions for the lineup here. Provide reasoning for each. If none are necessary, print "No actions recommended." and describe in 1-2 sentences why.>
+
+Borderline Decisions:
+<Place decisions that the user may want to consider, but are more of a toss-up, here. Provide reasoning for each. If none exist, print "No borderline decisions to consider." describe in 1-2 sentences why.>
+
+------------------------------------------------------------------------------
+```

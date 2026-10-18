@@ -2,6 +2,7 @@
 
 import pytest
 
+from ff_assistant import sleeper
 from ff_assistant.discord import split_report
 from ff_assistant.main import selected_leagues
 from ff_assistant.news import parse_injury_page
@@ -23,6 +24,22 @@ def test_selects_all_active_leagues_or_requested_subset() -> None:
         "2",
         "3",
     ]
+
+
+def test_get_players_uses_bundled_snapshot_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Load the bundled player map without requesting Sleeper's large endpoint."""
+    monkeypatch.setattr(
+        sleeper,
+        "get_json",
+        lambda *_: pytest.fail("Bundled player lookup made a network request"),
+    )
+
+    players = sleeper.get_players()
+
+    assert len(players) > 1000
+    assert sleeper.get_players_fetched_at().endswith("Z")
 
 
 def test_waiver_pool_excludes_every_rostered_player(
