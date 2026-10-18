@@ -119,4 +119,11 @@ def test_run_identifies_failed_report_stage(
     )
     assert "while generating the report with Gemini" in send_report.call_args.args[1]
     assert main.analyze.call_args.kwargs["retry_delay_seconds"] == 1.25
+    assert main.analyze.call_args.kwargs["qa_reviewer"].model == (
+        "gemini-3.5-flash-lite"
+    )
+    assert (
+        main.analyze.call_args.kwargs["request_throttle"]
+        is main.analyze.call_args.kwargs["qa_reviewer"].request_throttle
+    )
     assert all("secret-key" not in message for message in messages)
