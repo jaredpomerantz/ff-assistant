@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from ff_assistant.discord import send_report
 from ff_assistant.news import fetch_injury_report, for_roster
 from ff_assistant.player_matchups import PlayerMatchupLookup
 from ff_assistant.player_stats import PlayerStatsLookup
+from ff_assistant.player_values import PlayerValuesLookup
 
 
 def selected_leagues(
@@ -44,8 +46,11 @@ def selected_leagues(
     return found
 
 
-def run() -> int:
+def run(config: dict[str, str] | None = None) -> int:
     """Fetch league data and generate, preview, or send the requested reports.
+
+    Args:
+        config: Settings loaded from .env, or None to load them here.
 
     Returns:
         Zero when all requested reports succeed.
@@ -68,7 +73,8 @@ def run() -> int:
         help="Fetch data and print a concise summary without calling Gemini or Discord",
     )
     args = parser.parse_args()
-    config = load_config(Path(".env"))
+    if config is None:
+        config = load_config(Path(".env"))
     mode = args.mode or config.get("TASK_MODE") or "lineup"
     if mode not in ("waivers", "injuries", "lineup"):
         parser.error(f"invalid TASK_MODE in .env: {mode}")
@@ -95,9 +101,20 @@ def run() -> int:
     api_key = config.get("GEMINI_API_KEY", "")
     if not args.preview_context and not api_key:
         raise RuntimeError("GEMINI_API_KEY is required in .env")
+    try:
+        retry_delay_seconds = float(config.get("GEMINI_RETRY_DELAY_SECONDS") or "5")
+    except ValueError as exc:
+        raise ValueError(
+            "GEMINI_RETRY_DELAY_SECONDS must be a nonnegative finite number"
+        ) from exc
+    if not isfinite(retry_delay_seconds) or retry_delay_seconds < 0:
+        raise ValueError(
+            "GEMINI_RETRY_DELAY_SECONDS must be a nonnegative finite number"
+        )
 
     players = sleeper.get_players()
     stats_lookup = PlayerStatsLookup(int(season), players)
+    values_lookup = PlayerValuesLookup(players)
     trending = sleeper.get_trending("add") if mode == "waivers" else []
     state = sleeper.get_state()
     matchups_lookup = PlayerMatchupLookup(
@@ -160,6 +177,8 @@ def run() -> int:
                 model=model,
                 stats_lookup=stats_lookup,
                 matchups_lookup=matchups_lookup,
+                retry_delay_seconds=retry_delay_seconds,
+                values_lookup=values_lookup,
             )
             stage = "sending the report to Discord"
             send_report(webhook, f"**{name} — {mode.title()} report**\n{report}")
@@ -199,7 +218,12 @@ def main() -> None:
     logger.remove()
     logger.add(sys.stderr, level="INFO", backtrace=False, diagnose=False)
     try:
-        raise SystemExit(run())
+        config = load_config(Path(".env"))
+        log_level = (config.get("LOG_LEVEL") or "INFO").upper()
+        if log_level != "INFO":
+            logger.remove()
+            logger.add(sys.stderr, level=log_level, backtrace=False, diagnose=False)
+        raise SystemExit(run(config))
     except Exception:
         logger.exception("Fantasy report failed")
         raise SystemExit(1) from None

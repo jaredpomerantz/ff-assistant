@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from loguru import logger
 import pytest
@@ -53,6 +53,22 @@ def test_run_uses_dotenv_username(
     get_user.assert_called_once_with("file-user")
 
 
+def test_main_enables_debug_level_from_dotenv() -> None:
+    """Configure the stderr logger before running a DEBUG report."""
+    config = {"LOG_LEVEL": "DEBUG"}
+    with (
+        patch.object(main, "load_config", return_value=config),
+        patch.object(main, "run", return_value=0) as run,
+        patch.object(main, "logger") as log,
+    ):
+        with pytest.raises(SystemExit) as raised:
+            main.main()
+
+    assert raised.value.code == 0
+    assert log.add.call_args.kwargs["level"] == "DEBUG"
+    run.assert_called_once_with(config)
+
+
 def test_run_identifies_failed_report_stage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -61,6 +77,7 @@ def test_run_identifies_failed_report_stage(
         'SLEEPER_USERNAME="file-user"\n'
         'SLEEPER_SEASON="2026"\n'
         'GEMINI_API_KEY="secret-key"\n'
+        'GEMINI_RETRY_DELAY_SECONDS="1.25"\n'
         'DISCORD_WEBHOOK_URL="https://example.com/webhook"\n',
         encoding="utf-8",
     )
@@ -101,4 +118,5 @@ def test_run_identifies_failed_report_stage(
         for message in messages
     )
     assert "while generating the report with Gemini" in send_report.call_args.args[1]
+    assert main.analyze.call_args.kwargs["retry_delay_seconds"] == 1.25
     assert all("secret-key" not in message for message in messages)

@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import json
 from importlib.resources import files
+from math import isfinite
+from time import monotonic, sleep
 from typing import Any, cast
 
 from google import genai
+from google.genai import errors
 from google.genai.interactions import Interaction
 from loguru import logger
 
 from ff_assistant.player_matchups import PlayerMatchupLookup
 from ff_assistant.player_stats import PlayerStatsLookup
+from ff_assistant.player_values import ATTRIBUTION, PlayerValuesLookup
 
 
 def _read_prompt(name: str) -> str:
@@ -29,6 +33,7 @@ TASKS = {
     task: _read_prompt(f"{task}.txt") for task in ("waivers", "injuries", "lineup")
 }
 MAX_TOOL_ROUNDS = 4
+MAX_GEMINI_ATTEMPTS = 3
 PLAYER_STATS_TOOL = {
     "type": "function",
     "name": "get_player_stats",
@@ -59,6 +64,26 @@ PLAYER_MATCHUPS_TOOL = {
     "description": (
         "Look up current-week NFL opponents, byes, and kickoff times for Sleeper "
         "player IDs in the supplied report data. Does not project fantasy points."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "player_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "One to twelve Sleeper player IDs from the report data.",
+            },
+        },
+        "required": ["player_ids"],
+    },
+}
+PLAYER_VALUES_TOOL = {
+    "type": "function",
+    "name": "get_player_values",
+    "description": (
+        "Look up current TheTradeCalc dynasty trade values and overall/position "
+        "rankings for Sleeper player IDs in this report. Values use a 12-team "
+        "Superflex PPR baseline and are estimates, not projections."
     ),
     "parameters": {
         "type": "object",
@@ -121,6 +146,125 @@ def _run_matchups_tool(
     return matchups_lookup.lookup(player_ids)
 
 
+def _run_values_tool(
+    arguments: Any, context: dict[str, Any], values_lookup: PlayerValuesLookup
+) -> dict[str, Any]:
+    if not isinstance(arguments, dict):
+        return {"status": "invalid_request", "reason": "Invalid tool arguments"}
+    player_ids = arguments.get("player_ids")
+    if (
+        not isinstance(player_ids, list)
+        or any(not isinstance(player_id, str) for player_id in player_ids)
+        or not set(player_ids) <= _allowed_player_ids(context)
+    ):
+        return {
+            "status": "invalid_request",
+            "reason": "Player ID is not in this report",
+        }
+    return values_lookup.lookup(player_ids)
+
+
+def _request_turn(
+    client: genai.Client,
+    model: str,
+    history: list[dict[str, Any]],
+    turn_number: int,
+    retry_delay_seconds: float,
+) -> tuple[Interaction, float, int]:
+    """Retry transient Gemini request failures with the configured delay."""
+    started = monotonic()
+    for attempt in range(1, MAX_GEMINI_ATTEMPTS + 1):
+        try:
+            response = cast(
+                Interaction,
+                client.interactions.create(
+                    model=model,
+                    system_instruction=SYSTEM,
+                    input=history,
+                    tools=[PLAYER_STATS_TOOL, PLAYER_MATCHUPS_TOOL, PLAYER_VALUES_TOOL],
+                    generation_config={"max_output_tokens": 1800},
+                    store=False,
+                    stream=False,
+                ),
+            )
+            return response, monotonic() - started, attempt
+        except errors.APIError as exc:
+            headers = getattr(exc.response, "headers", None)
+            request_id = None
+            if headers is not None:
+                for header in ("x-request-id", "x-goog-request-id"):
+                    request_id = headers.get(header)
+                    if request_id:
+                        break
+            retryable = exc.code in (408, 429) or 500 <= exc.code < 600
+            retry = retryable and attempt < MAX_GEMINI_ATTEMPTS
+            log = logger.warning if retry else logger.error
+            log(
+                "Gemini turn {} attempt {}/{} failed: model={} error_type={} "
+                "http_status={} api_status={} request_id={} elapsed_s={:.2f}",
+                turn_number,
+                attempt,
+                MAX_GEMINI_ATTEMPTS,
+                model,
+                type(exc).__name__,
+                exc.code,
+                exc.status,
+                request_id,
+                monotonic() - started,
+            )
+            if retry:
+                logger.warning(
+                    "Retrying Gemini turn {} in {} seconds",
+                    turn_number,
+                    retry_delay_seconds,
+                )
+                sleep(retry_delay_seconds)
+                continue
+            raise RuntimeError(
+                f"Gemini turn {turn_number} failed "
+                f"(HTTP {exc.code}, status={exc.status}, request_id={request_id})"
+            ) from None
+        except (TimeoutError, ConnectionError) as exc:
+            retry = attempt < MAX_GEMINI_ATTEMPTS
+            log = logger.warning if retry else logger.error
+            log(
+                "Gemini turn {} attempt {}/{} failed: model={} error_type={} "
+                "elapsed_s={:.2f}",
+                turn_number,
+                attempt,
+                MAX_GEMINI_ATTEMPTS,
+                model,
+                type(exc).__name__,
+                monotonic() - started,
+            )
+            if retry:
+                logger.warning(
+                    "Retrying Gemini turn {} in {} seconds",
+                    turn_number,
+                    retry_delay_seconds,
+                )
+                sleep(retry_delay_seconds)
+                continue
+            raise RuntimeError(
+                f"Gemini turn {turn_number} failed ({type(exc).__name__})"
+            ) from None
+        except Exception as exc:
+            logger.error(
+                "Gemini turn {} attempt {}/{} failed: model={} error_type={} "
+                "elapsed_s={:.2f}",
+                turn_number,
+                attempt,
+                MAX_GEMINI_ATTEMPTS,
+                model,
+                type(exc).__name__,
+                monotonic() - started,
+            )
+            raise RuntimeError(
+                f"Gemini turn {turn_number} failed ({type(exc).__name__})"
+            ) from None
+    raise RuntimeError("Gemini request exhausted all attempts")
+
+
 def analyze(
     task: str,
     context: dict[str, Any],
@@ -128,6 +272,8 @@ def analyze(
     model: str,
     stats_lookup: PlayerStatsLookup,
     matchups_lookup: PlayerMatchupLookup,
+    retry_delay_seconds: float = 5.0,
+    values_lookup: PlayerValuesLookup | None = None,
 ) -> str:
     """Generate a report from the supplied league snapshot.
 
@@ -138,6 +284,8 @@ def analyze(
         model: Model name read from the dotenv file or its default.
         stats_lookup: Season-scoped lookup for nflverse player statistics.
         matchups_lookup: Week-scoped lookup for NFL player matchups.
+        retry_delay_seconds: Delay between transient Gemini request attempts.
+        values_lookup: Optional source for current dynasty values and rankings.
 
     Returns:
         The generated report text.
@@ -148,6 +296,8 @@ def analyze(
     """
     if task not in TASKS:
         raise ValueError(f"Unknown task: {task}")
+    if not isfinite(retry_delay_seconds) or retry_delay_seconds < 0:
+        raise ValueError("retry_delay_seconds must be a nonnegative finite number")
     prompt = (
         f"Report mode: {task}\n"
         f"Task instructions: {TASKS[task]}\n"
@@ -156,23 +306,44 @@ def analyze(
     history: list[dict[str, Any]] = [
         {"type": "user_input", "content": [{"type": "text", "text": prompt}]}
     ]
+    used_values = False
     with genai.Client(api_key=api_key) as client:
         for turn in range(MAX_TOOL_ROUNDS + 1):
-            logger.info("Requesting Gemini turn {} for {} report", turn + 1, task)
-            response = cast(
-                Interaction,
-                client.interactions.create(
-                    model=model,
-                    system_instruction=SYSTEM,
-                    input=history,
-                    tools=[PLAYER_STATS_TOOL, PLAYER_MATCHUPS_TOOL],
-                    generation_config={"max_output_tokens": 1800},
-                    store=False,
-                    stream=False,
-                ),
+            turn_number = turn + 1
+            logger.info(
+                "Requesting Gemini turn {} for {} report: model={} "
+                "history_entries={} prompt_chars={}",
+                turn_number,
+                task,
+                model,
+                len(history),
+                len(prompt),
+            )
+            response, elapsed, attempt = _request_turn(
+                client, model, history, turn_number, retry_delay_seconds
             )
             steps = response.steps or []
             calls = [step for step in steps if step.type == "function_call"]
+            usage = response.usage
+            logger.debug(
+                "Gemini turn {} returned: status={} interaction_id={} "
+                "attempt={} elapsed_s={:.2f} input_tokens={} output_tokens={} "
+                "thought_tokens={} tool_calls={}",
+                turn_number,
+                response.status,
+                response.id,
+                attempt,
+                elapsed,
+                usage.total_input_tokens if usage else None,
+                usage.total_output_tokens if usage else None,
+                usage.total_thought_tokens if usage else None,
+                len(calls),
+            )
+            logger.debug(
+                "Gemini turn {} model output:\n{}",
+                turn_number,
+                response.output_text if response.output_text is not None else "<none>",
+            )
             if not calls:
                 report = (response.output_text or "").strip()
                 if not report:
@@ -182,21 +353,44 @@ def analyze(
                     step_types = [step.type for step in steps]
                     raise RuntimeError(
                         "Model returned an empty report "
-                        f"(status={response.status}, error_codes={error_codes}, "
-                        f"step_types={step_types})"
+                        f"(turn={turn_number}, status={response.status}, "
+                        f"interaction_id={response.id}, error_codes={error_codes}, "
+                        f"step_types={step_types}, "
+                        f"output_tokens={usage.total_output_tokens if usage else None})"
                     )
+                if used_values and ATTRIBUTION not in report:
+                    separator = "-" * 85
+                    if report.endswith(separator):
+                        body = report[: -len(separator)].rstrip()
+                        report = f"{body}\n{ATTRIBUTION}\n{separator}"
+                    else:
+                        report = f"{report}\n{ATTRIBUTION}"
                 logger.info("Generated {} report with {} characters", task, len(report))
                 return report
             if turn == MAX_TOOL_ROUNDS:
-                raise RuntimeError("Model exceeded the tool call limit")
+                raise RuntimeError(
+                    f"Model exceeded the tool call limit on turn {turn_number} "
+                    f"(status={response.status}, interaction_id={response.id})"
+                )
             history.extend(step.model_dump() for step in steps)
-            logger.info("Answering {} model tool calls", len(calls))
+            logger.info(
+                "Answering {} model tool calls on turn {}: names={}",
+                len(calls),
+                turn_number,
+                [call.name for call in calls],
+            )
             for call in calls:
                 if call.name == "get_player_stats":
                     result = _run_stats_tool(call.arguments, context, stats_lookup)
                 elif call.name == "get_player_matchups":
                     result = _run_matchups_tool(
                         call.arguments, context, matchups_lookup
+                    )
+                elif call.name == "get_player_values" and values_lookup is not None:
+                    result = _run_values_tool(call.arguments, context, values_lookup)
+                    used_values |= result.get("status") == "available" and any(
+                        player.get("status") == "available"
+                        for player in result.get("players", [])
                     )
                 else:
                     result = {"status": "invalid_request", "reason": "Unknown tool"}

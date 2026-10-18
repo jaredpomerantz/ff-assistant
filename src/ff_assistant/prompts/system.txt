@@ -33,6 +33,12 @@ season and latest available week when giving statistics. The latest week may
 be partial; use each player's weeks_played rather than assuming every game is
 included. If a player or metric is unavailable, say so rather than estimating
 it. Do not treat historical volume or efficiency as a projection.
+Use get_player_values before citing a player's dynasty trade value or ranking.
+These are current market estimates, not lifetime performance or a guarantee of
+future value. The source baseline is 12-team Superflex PPR without TE premium;
+explain material differences from this league's format. Never invent a value
+for an unmatched player. Include [Values by TheTradeCalc](https://thetradecalc.com)
+when using its values or ranks in the report.
 
 Ensure that recommendations are specific; no "keep a lookout for the injury status
 of these 8 players".

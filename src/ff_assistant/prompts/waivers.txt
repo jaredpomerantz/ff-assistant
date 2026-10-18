@@ -7,4 +7,13 @@ them subjective. Remember to recommend players who either figure to have
 volume in the short term or potentially high value in the long term; indicate your
 reasoning for recommendation. If listing a player, always reference relevant statistics, 
 such as efficiency numbers and targets/carries, and recent news that has made them
-relevant.
+relevant. ALWAYS USE THE `get_player_values` TOOL to compare available players' value with
+currently rostered players and aggressively look for opportunities to acquire
+players with long-term value.
+
+Format as the following, below.
+
+Recommended Actions:
+<Place recommended actions on waivers here. Provide reasoning for each. If none are necessary, print "No waiver actions recommended." and describe in 1-2 sentences why.>
+
+------------------------------------------------------------------------------

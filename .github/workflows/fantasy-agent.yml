@@ -15,6 +15,10 @@ on:
         type: choice
         options: [waivers, injuries, lineup]
         default: lineup
+      debug_logging:
+        description: Log Gemini response details and full model output
+        type: boolean
+        default: false
 
 jobs:
   report:
@@ -36,6 +40,8 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SLEEPER_USERNAME: ${{ secrets.SLEEPER_USERNAME }}
           GEMINI_MODEL: gemini-3.5-flash-lite
+          GEMINI_RETRY_DELAY_SECONDS: ${{ vars.GEMINI_RETRY_DELAY_SECONDS || '5' }}
+          LOG_LEVEL: ${{ inputs.debug_logging && 'DEBUG' || 'INFO' }}
           TASK_MODE: >-
             ${{ inputs.task_mode ||
                 (github.event.schedule == '0 8 * * 2' && 'waivers') ||
@@ -52,6 +58,8 @@ jobs:
               "DISCORD_WEBHOOK_URL",
               "SLEEPER_USERNAME",
               "GEMINI_MODEL",
+              "GEMINI_RETRY_DELAY_SECONDS",
+              "LOG_LEVEL",
               "TASK_MODE",
           )
           path = Path(".env")
