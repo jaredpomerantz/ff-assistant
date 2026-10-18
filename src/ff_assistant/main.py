@@ -19,6 +19,8 @@ from ff_assistant.news import fetch_injury_report, for_roster
 from ff_assistant.player_matchups import PlayerMatchupLookup
 from ff_assistant.player_stats import PlayerStatsLookup
 from ff_assistant.player_values import PlayerValuesLookup
+from ff_assistant.quality import DEFAULT_QA_MODEL, ReportReviewer
+from ff_assistant.request_throttle import ModelRequestThrottle
 
 
 def selected_leagues(
@@ -130,6 +132,18 @@ def run(config: dict[str, str] | None = None) -> int:
     )
     failures = []
     model = config.get("GEMINI_MODEL") or "gemini-3.5-flash-lite"
+    qa_model = config.get("QA_MODEL") or DEFAULT_QA_MODEL
+    request_throttle = ModelRequestThrottle(retry_delay_seconds)
+    qa_reviewer = (
+        ReportReviewer(
+            api_key,
+            qa_model,
+            retry_delay_seconds=retry_delay_seconds,
+            request_throttle=request_throttle,
+        )
+        if not args.preview_context
+        else None
+    )
     for number, league in enumerate(chosen, start=1):
         league_id = str(league["league_id"])
         name = str(league.get("name") or league_id)
@@ -168,7 +182,10 @@ def run(config: dict[str, str] | None = None) -> int:
                 )
                 logger.info("Previewed league {}/{}", number, len(chosen))
                 continue
-            stage = f"generating the report with Gemini model {model}"
+            stage = (
+                f"generating the report with Gemini model {model} "
+                f"and QA model {qa_model}"
+            )
             logger.info("{} for league {} ({})", stage, name, league_id)
             report = analyze(
                 mode,
@@ -179,6 +196,8 @@ def run(config: dict[str, str] | None = None) -> int:
                 matchups_lookup=matchups_lookup,
                 retry_delay_seconds=retry_delay_seconds,
                 values_lookup=values_lookup,
+                qa_reviewer=qa_reviewer,
+                request_throttle=request_throttle,
             )
             stage = "sending the report to Discord"
             send_report(webhook, f"**{name} — {mode.title()} report**\n{report}")

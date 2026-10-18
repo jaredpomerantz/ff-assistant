@@ -10,6 +10,8 @@ from loguru import logger
 import pytest
 
 from ff_assistant.analysis import SYSTEM, analyze
+from ff_assistant.quality import ReportReviewer
+from ff_assistant.request_throttle import ModelRequestThrottle
 
 
 def test_analyze_sends_report_to_gemini() -> None:
@@ -29,7 +31,9 @@ def test_analyze_sends_report_to_gemini() -> None:
         )
 
     assert report == "Start this player."
-    client_class.assert_called_once_with(api_key="test-key")
+    client_class.assert_called_once()
+    assert client_class.call_args.kwargs["api_key"] == "test-key"
+    assert client_class.call_args.kwargs["http_options"].retry_options.attempts == 1
     request = create.call_args.kwargs
     assert request["model"] == "gemini-3.8-flash"
     assert request["system_instruction"] == SYSTEM
@@ -134,6 +138,163 @@ def test_lineup_can_complete_after_five_tool_rounds() -> None:
 
     assert report == "Keep the current starters."
     assert create.call_count == 6
+
+
+def test_analyze_revises_and_rechecks_contradictory_report() -> None:
+    """Do not return the first draft when QA identifies a contradiction."""
+    reviewer = Mock()
+    reviewer.review.side_effect = [("A is both active and out",), ()]
+    first = Mock(steps=[], output_text="A is active. A is out.")
+    revised = Mock(steps=[], output_text="A is out. Start B instead.")
+
+    with patch("ff_assistant.analysis.genai.Client") as client_class:
+        create = client_class.return_value.__enter__.return_value.interactions.create
+        create.side_effect = [first, revised]
+        report = analyze(
+            "lineup",
+            {},
+            "test-key",
+            "gemini-3.8-flash",
+            Mock(),
+            Mock(),
+            qa_reviewer=reviewer,
+        )
+
+    assert report == "A is out. Start B instead."
+    assert reviewer.review.call_count == 2
+    assert create.call_count == 2
+    revision_request = create.call_args.kwargs
+    assert revision_request["tools"] == []
+    revision_text = revision_request["input"][-1]["content"][0]["text"]
+    assert "A is both active and out" in revision_text
+    assert "A is active. A is out." in revision_text
+
+
+def test_analyze_returns_report_only_after_qa_approval() -> None:
+    """Review a clean draft once before returning it for delivery."""
+    reviewer = Mock()
+    reviewer.review.return_value = ()
+    with patch("ff_assistant.analysis.genai.Client") as client_class:
+        create = client_class.return_value.__enter__.return_value.interactions.create
+        create.return_value.steps = []
+        create.return_value.output_text = "Keep the current starters."
+
+        report = analyze(
+            "lineup",
+            {},
+            "test-key",
+            "gemini-3.8-flash",
+            Mock(),
+            Mock(),
+            qa_reviewer=reviewer,
+        )
+
+    assert report == "Keep the current starters."
+    reviewer.review.assert_called_once_with(report)
+    create.assert_called_once()
+
+
+def test_main_turn_and_qa_review_share_request_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wait five seconds between main and QA calls to the same model."""
+    now = [100.0]
+    waits: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        waits.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr("ff_assistant.request_throttle.monotonic", lambda: now[0])
+    monkeypatch.setattr("ff_assistant.request_throttle.sleep", fake_sleep)
+    throttle = ModelRequestThrottle(5.0)
+    reviewer = ReportReviewer("test-key", request_throttle=throttle)
+    reviewer._chain = Mock()
+    reviewer._chain.invoke.return_value = {
+        "consistent": True,
+        "contradictions": [],
+    }
+
+    with patch("ff_assistant.analysis.genai.Client") as client_class:
+        create = client_class.return_value.__enter__.return_value.interactions.create
+        create.return_value.steps = []
+        create.return_value.output_text = "Keep the current starters."
+        report = analyze(
+            "lineup",
+            {},
+            "test-key",
+            "gemini-3.5-flash-lite",
+            Mock(),
+            Mock(),
+            qa_reviewer=reviewer,
+            request_throttle=throttle,
+        )
+
+    assert report == "Keep the current starters."
+    assert waits == [5.0]
+
+
+def test_qa_revision_and_recheck_keep_same_request_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Space draft, first QA, revision, and second QA through one timer."""
+    now = [100.0]
+    waits: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        waits.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr("ff_assistant.request_throttle.monotonic", lambda: now[0])
+    monkeypatch.setattr("ff_assistant.request_throttle.sleep", fake_sleep)
+    throttle = ModelRequestThrottle(5.0)
+    reviewer = ReportReviewer("test-key", request_throttle=throttle)
+    reviewer._chain = Mock()
+    reviewer._chain.invoke.side_effect = [
+        {"consistent": False, "contradictions": ["A is both active and out"]},
+        {"consistent": True, "contradictions": []},
+    ]
+    draft = Mock(steps=[], output_text="A is active. A is out.")
+    revision = Mock(steps=[], output_text="A is out.")
+
+    with patch("ff_assistant.analysis.genai.Client") as client_class:
+        create = client_class.return_value.__enter__.return_value.interactions.create
+        create.side_effect = [draft, revision]
+        report = analyze(
+            "lineup",
+            {},
+            "test-key",
+            "gemini-3.5-flash-lite",
+            Mock(),
+            Mock(),
+            qa_reviewer=reviewer,
+            request_throttle=throttle,
+        )
+
+    assert report == "A is out."
+    assert waits == [5.0, 5.0, 5.0]
+
+
+def test_analyze_withholds_report_when_revision_still_contradicts() -> None:
+    """Fail the report after one unsuccessful correction."""
+    reviewer = Mock()
+    reviewer.review.side_effect = [("conflict",), ("conflict remains",)]
+    first = Mock(steps=[], output_text="First draft")
+    revised = Mock(steps=[], output_text="Still contradictory")
+
+    with patch("ff_assistant.analysis.genai.Client") as client_class:
+        create = client_class.return_value.__enter__.return_value.interactions.create
+        create.side_effect = [first, revised]
+        with pytest.raises(RuntimeError, match="unresolved contradictions"):
+            analyze(
+                "waivers",
+                {},
+                "test-key",
+                "gemini-3.8-flash",
+                Mock(),
+                Mock(),
+                qa_reviewer=reviewer,
+            )
 
 
 def test_analyze_logs_gemini_api_failure_without_request_content() -> None:

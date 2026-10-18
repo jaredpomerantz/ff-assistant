@@ -9,13 +9,15 @@ from time import monotonic, sleep
 from typing import Any, cast
 
 from google import genai
-from google.genai import errors
+from google.genai import errors, types
 from google.genai.interactions import Interaction
 from loguru import logger
 
 from ff_assistant.player_matchups import PlayerMatchupLookup
 from ff_assistant.player_stats import PlayerStatsLookup
 from ff_assistant.player_values import ATTRIBUTION, PlayerValuesLookup
+from ff_assistant.quality import ReportReviewer
+from ff_assistant.request_throttle import ModelRequestThrottle
 
 
 def _read_prompt(name: str) -> str:
@@ -113,6 +115,17 @@ def _allowed_player_ids(context: dict[str, Any]) -> set[str]:
     }
 
 
+def _with_value_attribution(report: str, used_values: bool) -> str:
+    """Credit the value source before the required closing separator."""
+    if not used_values or ATTRIBUTION in report:
+        return report
+    separator = "-" * 85
+    if report.endswith(separator):
+        body = report[: -len(separator)].rstrip()
+        return f"{body}\n{ATTRIBUTION}\n{separator}"
+    return f"{report}\n{ATTRIBUTION}"
+
+
 def _run_stats_tool(
     arguments: Any, context: dict[str, Any], stats_lookup: PlayerStatsLookup
 ) -> dict[str, Any]:
@@ -174,23 +187,39 @@ def _request_turn(
     turn_number: int,
     retry_delay_seconds: float,
     max_output_tokens: int,
+    tools: list[dict[str, Any]] | None = None,
+    request_throttle: ModelRequestThrottle | None = None,
 ) -> tuple[Interaction, float, int]:
     """Retry transient Gemini request failures with the configured delay."""
     started = monotonic()
     for attempt in range(1, MAX_GEMINI_ATTEMPTS + 1):
         try:
-            response = cast(
-                Interaction,
-                client.interactions.create(
-                    model=model,
-                    system_instruction=SYSTEM,
-                    input=history,
-                    tools=[PLAYER_STATS_TOOL, PLAYER_MATCHUPS_TOOL, PLAYER_VALUES_TOOL],
-                    generation_config={"max_output_tokens": max_output_tokens},
-                    store=False,
-                    stream=False,
-                ),
-            )
+            if request_throttle is not None:
+                request_throttle.wait(model)
+            try:
+                response = cast(
+                    Interaction,
+                    client.interactions.create(
+                        model=model,
+                        system_instruction=SYSTEM,
+                        input=history,
+                        tools=(
+                            [
+                                PLAYER_STATS_TOOL,
+                                PLAYER_MATCHUPS_TOOL,
+                                PLAYER_VALUES_TOOL,
+                            ]
+                            if tools is None
+                            else tools
+                        ),
+                        generation_config={"max_output_tokens": max_output_tokens},
+                        store=False,
+                        stream=False,
+                    ),
+                )
+            finally:
+                if request_throttle is not None:
+                    request_throttle.complete(model)
             return response, monotonic() - started, attempt
         except errors.APIError as exc:
             headers = getattr(exc.response, "headers", None)
@@ -278,6 +307,8 @@ def analyze(
     matchups_lookup: PlayerMatchupLookup,
     retry_delay_seconds: float = 5.0,
     values_lookup: PlayerValuesLookup | None = None,
+    qa_reviewer: ReportReviewer | None = None,
+    request_throttle: ModelRequestThrottle | None = None,
 ) -> str:
     """Generate a report from the supplied league snapshot.
 
@@ -290,6 +321,8 @@ def analyze(
         matchups_lookup: Week-scoped lookup for NFL player matchups.
         retry_delay_seconds: Delay between transient Gemini request attempts.
         values_lookup: Optional source for current dynasty values and rankings.
+        qa_reviewer: Optional reviewer for final report consistency.
+        request_throttle: Shared per-model request throttle for this run.
 
     Returns:
         The generated report text.
@@ -315,7 +348,12 @@ def analyze(
         LINEUP_MAX_OUTPUT_TOKENS if task == "lineup" else MAX_OUTPUT_TOKENS
     )
     used_values = False
-    with genai.Client(api_key=api_key) as client:
+    with genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            retry_options=types.HttpRetryOptions(attempts=1)
+        ),
+    ) as client:
         for turn in range(max_tool_rounds + 1):
             turn_number = turn + 1
             logger.info(
@@ -335,6 +373,7 @@ def analyze(
                 turn_number,
                 retry_delay_seconds,
                 max_output_tokens,
+                request_throttle=request_throttle,
             )
             steps = response.steps or []
             calls = [step for step in steps if step.type == "function_call"]
@@ -378,13 +417,58 @@ def analyze(
                         f"thought_tokens={thought_tokens}, "
                         f"max_output_tokens={max_output_tokens})"
                     )
-                if used_values and ATTRIBUTION not in report:
-                    separator = "-" * 85
-                    if report.endswith(separator):
-                        body = report[: -len(separator)].rstrip()
-                        report = f"{body}\n{ATTRIBUTION}\n{separator}"
-                    else:
-                        report = f"{report}\n{ATTRIBUTION}"
+                report = _with_value_attribution(report, used_values)
+                if qa_reviewer is not None:
+                    contradictions = qa_reviewer.review(report)
+                    if contradictions:
+                        logger.warning(
+                            "Revising {} report after QA found {} contradictions",
+                            task,
+                            len(contradictions),
+                        )
+                        revision_prompt = (
+                            "Revise the draft report to resolve the contradictions "
+                            "identified below. Preserve the useful recommendations "
+                            "and formatting. Use only the supplied report context "
+                            "and prior tool results. Do not add new factual claims; "
+                            "remove a claim if you cannot reconcile it. Return only "
+                            "the corrected report.\n"
+                            f"Contradictions: {json.dumps(contradictions)}\n"
+                            f"Draft report:\n{report}"
+                        )
+                        revision_history = [
+                            *history,
+                            {
+                                "type": "user_input",
+                                "content": [{"type": "text", "text": revision_prompt}],
+                            },
+                        ]
+                        revision, _, _ = _request_turn(
+                            client,
+                            model,
+                            revision_history,
+                            turn_number + 1,
+                            retry_delay_seconds,
+                            max_output_tokens,
+                            tools=[],
+                            request_throttle=request_throttle,
+                        )
+                        if any(
+                            step.type == "function_call"
+                            for step in (revision.steps or [])
+                        ):
+                            raise RuntimeError(
+                                "Gemini revision requested an unexpected tool"
+                            )
+                        report = (revision.output_text or "").strip()
+                        if not report:
+                            raise RuntimeError("Gemini returned an empty QA revision")
+                        report = _with_value_attribution(report, used_values)
+                        logger.debug("Gemini QA revision output:\n{}", report)
+                        if qa_reviewer.review(report):
+                            raise RuntimeError(
+                                "QA found unresolved contradictions after one revision"
+                            )
                 logger.info("Generated {} report with {} characters", task, len(report))
                 return report
             if turn == max_tool_rounds:
