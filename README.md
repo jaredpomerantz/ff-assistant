@@ -14,6 +14,8 @@ Set `LOG_LEVEL=DEBUG` in `.env` to log Gemini return details and its full output
 
 `GEMINI_RETRY_DELAY_SECONDS` defaults to `5`. A Gemini turn is retried up to two times after a transient HTTP 408, 429, or 5xx error, timeout, or connection error, with this many seconds between attempts. Other API errors fail immediately. Set the value in `.env` locally or as a GitHub Actions repository variable to change the delay. The Gemini SDK may also retry transient failures internally before this delay applies.
 
+Lineup reports allow eight tool rounds and up to 8,192 output tokens per Gemini turn because they compare starters and eligible alternatives across injuries, byes, and kickoff times. Waiver and injury reports retain four tool rounds and 1,800 output tokens per turn. If Gemini still returns an empty report, the failure log includes its status, error codes, token usage, and the output limit to help identify truncation or provider errors.
+
 ## Local commands
 
 ```bash

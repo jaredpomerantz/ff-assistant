@@ -38,7 +38,7 @@ def test_analyze_sends_report_to_gemini() -> None:
     assert request["tools"][1]["name"] == "get_player_matchups"
     assert request["tools"][2]["name"] == "get_player_values"
     assert request["store"] is False
-    assert request["generation_config"]["max_output_tokens"] == 1800
+    assert request["generation_config"]["max_output_tokens"] == 8192
 
 
 def test_analyze_logs_model_output_only_at_debug() -> None:
@@ -102,6 +102,38 @@ def test_analyze_rejects_empty_gemini_response() -> None:
             match="status=failed.*interaction_id=interaction-123.*MODEL_BUSY.*output_tokens=1800",
         ):
             analyze("waivers", {}, "test-key", "gemini-3.8-flash", Mock(), Mock())
+
+    assert create.call_args.kwargs["generation_config"]["max_output_tokens"] == 1800
+
+
+def test_lineup_can_complete_after_five_tool_rounds() -> None:
+    """Allow a complex lineup report to finish beyond the former four-round cap."""
+    call = Mock()
+    call.type = "function_call"
+    call.name = "get_player_matchups"
+    call.id = "call-1"
+    call.arguments = {"player_ids": ["s1"]}
+    call.model_dump.return_value = {
+        "type": "function_call",
+        "name": call.name,
+        "id": call.id,
+        "arguments": call.arguments,
+    }
+    lookup = Mock()
+    lookup.lookup.return_value = {"status": "available", "players": []}
+    context = {"my_roster": {"players": [{"id": "s1"}]}}
+    responses = [Mock(steps=[call], output_text=None) for _ in range(5)]
+    responses.append(Mock(steps=[], output_text="Keep the current starters."))
+
+    with patch("ff_assistant.analysis.genai.Client") as client_class:
+        create = client_class.return_value.__enter__.return_value.interactions.create
+        create.side_effect = responses
+        report = analyze(
+            "lineup", context, "test-key", "gemini-3.8-flash", Mock(), lookup
+        )
+
+    assert report == "Keep the current starters."
+    assert create.call_count == 6
 
 
 def test_analyze_logs_gemini_api_failure_without_request_content() -> None:

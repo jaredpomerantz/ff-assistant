@@ -33,6 +33,9 @@ TASKS = {
     task: _read_prompt(f"{task}.txt") for task in ("waivers", "injuries", "lineup")
 }
 MAX_TOOL_ROUNDS = 4
+LINEUP_MAX_TOOL_ROUNDS = 8
+MAX_OUTPUT_TOKENS = 1800
+LINEUP_MAX_OUTPUT_TOKENS = 8192
 MAX_GEMINI_ATTEMPTS = 3
 PLAYER_STATS_TOOL = {
     "type": "function",
@@ -170,6 +173,7 @@ def _request_turn(
     history: list[dict[str, Any]],
     turn_number: int,
     retry_delay_seconds: float,
+    max_output_tokens: int,
 ) -> tuple[Interaction, float, int]:
     """Retry transient Gemini request failures with the configured delay."""
     started = monotonic()
@@ -182,7 +186,7 @@ def _request_turn(
                     system_instruction=SYSTEM,
                     input=history,
                     tools=[PLAYER_STATS_TOOL, PLAYER_MATCHUPS_TOOL, PLAYER_VALUES_TOOL],
-                    generation_config={"max_output_tokens": 1800},
+                    generation_config={"max_output_tokens": max_output_tokens},
                     store=False,
                     stream=False,
                 ),
@@ -306,21 +310,31 @@ def analyze(
     history: list[dict[str, Any]] = [
         {"type": "user_input", "content": [{"type": "text", "text": prompt}]}
     ]
+    max_tool_rounds = LINEUP_MAX_TOOL_ROUNDS if task == "lineup" else MAX_TOOL_ROUNDS
+    max_output_tokens = (
+        LINEUP_MAX_OUTPUT_TOKENS if task == "lineup" else MAX_OUTPUT_TOKENS
+    )
     used_values = False
     with genai.Client(api_key=api_key) as client:
-        for turn in range(MAX_TOOL_ROUNDS + 1):
+        for turn in range(max_tool_rounds + 1):
             turn_number = turn + 1
             logger.info(
                 "Requesting Gemini turn {} for {} report: model={} "
-                "history_entries={} prompt_chars={}",
+                "history_entries={} prompt_chars={} max_output_tokens={}",
                 turn_number,
                 task,
                 model,
                 len(history),
                 len(prompt),
+                max_output_tokens,
             )
             response, elapsed, attempt = _request_turn(
-                client, model, history, turn_number, retry_delay_seconds
+                client,
+                model,
+                history,
+                turn_number,
+                retry_delay_seconds,
+                max_output_tokens,
             )
             steps = response.steps or []
             calls = [step for step in steps if step.type == "function_call"]
@@ -351,12 +365,18 @@ def analyze(
                         error.code for error in (response.errors or []) if error.code
                     ]
                     step_types = [step.type for step in steps]
+                    input_tokens = usage.total_input_tokens if usage else None
+                    output_tokens = usage.total_output_tokens if usage else None
+                    thought_tokens = usage.total_thought_tokens if usage else None
                     raise RuntimeError(
                         "Model returned an empty report "
                         f"(turn={turn_number}, status={response.status}, "
                         f"interaction_id={response.id}, error_codes={error_codes}, "
                         f"step_types={step_types}, "
-                        f"output_tokens={usage.total_output_tokens if usage else None})"
+                        f"input_tokens={input_tokens}, "
+                        f"output_tokens={output_tokens}, "
+                        f"thought_tokens={thought_tokens}, "
+                        f"max_output_tokens={max_output_tokens})"
                     )
                 if used_values and ATTRIBUTION not in report:
                     separator = "-" * 85
@@ -367,10 +387,11 @@ def analyze(
                         report = f"{report}\n{ATTRIBUTION}"
                 logger.info("Generated {} report with {} characters", task, len(report))
                 return report
-            if turn == MAX_TOOL_ROUNDS:
+            if turn == max_tool_rounds:
                 raise RuntimeError(
                     f"Model exceeded the tool call limit on turn {turn_number} "
-                    f"(status={response.status}, interaction_id={response.id})"
+                    f"(max_tool_rounds={max_tool_rounds}, status={response.status}, "
+                    f"interaction_id={response.id})"
                 )
             history.extend(step.model_dump() for step in steps)
             logger.info(
