@@ -34,6 +34,8 @@ jobs:
         with:
           version: "0.9.26"
       - run: uv sync --locked --no-dev
+      - name: Refresh Sleeper player directory
+        run: uv run --no-sync python -m ff_assistant.refresh_players
       - name: Write .env
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

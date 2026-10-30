@@ -84,7 +84,7 @@ def get_rosters(league_id: str) -> list[dict[str, Any]]:
     return get_json(f"league/{league_id}/rosters")
 
 
-def get_trending(kind: str, limit: int = 50) -> list[dict[str, Any]]:
+def get_trending(kind: str, limit: int = 200) -> list[dict[str, Any]]:
     """Return trending NFL players for the requested transaction kind."""
     return get_json(
         f"players/nfl/trending/{kind}", {"lookback_hours": 72, "limit": limit}
@@ -195,8 +195,12 @@ def build_context(
             continue
         summary["trending_adds_72h"] = item.get("count")
         trending_candidates.append(summary)
-        if len(trending_candidates) == 35:
-            break
+    logger.info(
+        "League {}: {} eligible free agents from {} trending players",
+        league_id,
+        len(trending_candidates),
+        len(trending),
+    )
     starters = mine.get("starters") or []
     reserve = set(mine.get("reserve") or [])
     taxi = set(mine.get("taxi") or [])
