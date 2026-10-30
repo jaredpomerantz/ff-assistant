@@ -28,15 +28,17 @@ python -m ff_assistant.main --mode lineup
 pytest
 ```
 
-The app loads player metadata from the bundled `src/ff_assistant/resources/sleeper-players.json.gz` snapshot. Normal runs and GitHub Actions do not request Sleeper's large `players/nfl` endpoint. The snapshot was fetched on 2026-10-16 and is static until manually refreshed, so its teams, status, and injury fields can become stale. League settings, rosters, and trending additions still come from Sleeper at run time. The model receives a compact roster-specific context, never the entire player database.
+The app loads player metadata from `src/ff_assistant/resources/sleeper-players.json.gz`. At the beginning of each GitHub Actions job, a refresh step fetches Sleeper's `players/nfl` endpoint once and replaces this compressed snapshot and its fetch timestamp before generating any reports. All leagues in that job share the updated file. A failed or invalid refresh fails the job rather than silently using stale metadata. These updates live in the runner's resources directory for that job; they are not committed back to the repository. Local report runs continue to use the existing snapshot until you refresh it. League settings, rosters, and trending additions come from Sleeper at run time. The model receives a compact roster-specific context, never the entire player database.
 
 To refresh the bundled snapshot from the repository root, run:
 
 ```bash
-curl --fail --location --compressed https://api.sleeper.app/v1/players/nfl --output src/ff_assistant/resources/sleeper-players.json
-gzip -n -9 -f src/ff_assistant/resources/sleeper-players.json
-date -u +%Y-%m-%dT%H:%M:%SZ > src/ff_assistant/resources/sleeper-players-fetched-at.txt
+uv run python -m ff_assistant.refresh_players
 ```
+
+[Sleeper recommends](https://docs.sleeper.com/) fetching the full player directory at most once per day. The scheduled jobs run on separate days; avoid repeatedly running the workflow manually on the same day.
+
+Waiver runs request the top 200 trending additions over 72 hours, up from 50. Each league filters out rostered players, unsupported positions, and inactive or retired players, then supplies every remaining candidate to the model without the previous 35-player cutoff. The logs show the received and eligible candidate counts. The waiver prompt asks the model to review the full pool, including less popular players, while recommending at most ten additions based on roster needs and long-term value.
 
 The model can request regular-season player statistics through `nflreadpy` for rostered players and available trending candidates in its report context. The tool returns season and recent-game attempts, carries, targets, catches, yards, touchdowns, and derived efficiency rates. Offensive snap percentages are included when nflverse player IDs can be matched to the separate PFR snap-count data. Data loads on the first tool call and is reused across leagues in the same run. Tool results state the latest week available; missing or stale data should not be treated as current-week performance.
 
