@@ -2,11 +2,11 @@ name: Fantasy Football Agent
 
 on:
   schedule:
-    - cron: "0 8 * * 2"
+    - cron: "0 4 * * 2"
       timezone: "America/Chicago"
-    - cron: "0 8 * * 4"
+    - cron: "0 4 * * 4"
       timezone: "America/Chicago"
-    - cron: "0 8 * * 0"
+    - cron: "0 4 * * 0"
       timezone: "America/Chicago"
   workflow_dispatch:
     inputs:
